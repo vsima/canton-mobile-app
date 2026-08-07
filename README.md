@@ -3,6 +3,35 @@
 iOS and Android apps for the Canton Network, built on
 [canton-mobile-sdk](https://github.com/vsima/canton-mobile-sdk).
 
+This is the **reference wallet** for the SDK: it proves the native wallet
+stack end-to-end, targets featured-app status on the Global Synchronizer, and
+leads with what no other Canton wallet offers — an open, validator-agnostic
+client with self-custody keys held in the device enclave (P-256 external
+parties are live-verified in the SDK's integration suite).
+
+## Product direction
+
+Strategy and research live in [`docs/`](docs/):
+
+- [Product strategy & ecosystem review](docs/product-strategy-and-ecosystem-review.md)
+  — what matters for a Canton app, the competitive wallet field, and the
+  work-package parity plan against Digital Asset's TypeScript wallet SDK
+- [Canton ecosystem strategy brief](docs/canton-ecosystem-strategy-brief.md)
+  — ecosystem health, monetization, and go-to-market phasing (maintained
+  edition; the [original PDF](docs/Canton-Ecosystem-Strategy-Brief.pdf) is
+  kept as a snapshot)
+
+Roadmap (sequenced in the strategy doc, §6):
+
+1. **Portfolio & sync** — connection, auth, ACS-backed portfolio with
+   offset-resumable streams *(SDK core layer: shipped)*
+2. **Transfers & inbox** — CIP-0056 transfers with the propose→accept
+   pending-actions inbox and push notifications
+3. **Self-custody** — external-party onboarding with Secure Enclave /
+   StrongBox keys *(SDK wallet layer: onboarding + signing proven live)*
+4. **Corporate layer** — approvals, audit export, custody integrations, and
+   a macOS treasury console from the same Swift package
+
 ## Layout
 
 Mirrors the SDK monorepo:
