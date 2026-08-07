@@ -71,22 +71,70 @@ struct ConnectionFailedView: View {
     }
 }
 
+enum WalletSection: String, CaseIterable, Identifiable {
+    case portfolio = "Portfolio"
+    case inbox = "Inbox"
+    case send = "Send"
+    case receive = "Receive"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .portfolio: "creditcard"
+        case .inbox: "tray"
+        case .send: "paperplane"
+        case .receive: "qrcode"
+        }
+    }
+}
+
+/// Adaptive shell: tabs on iPhone, a real sidebar split view on iPad and
+/// Mac — regular-width layouts are first-class, not a stretched phone.
 struct WalletTabsView: View {
     @Environment(WalletModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var section: WalletSection? = .portfolio
 
     var body: some View {
-        TabView {
-            PortfolioView()
-                .tabItem { Label("Portfolio", systemImage: "creditcard") }
-            InboxView()
-                .tabItem { Label("Inbox", systemImage: "tray") }
-                .badge(model.inbox.count)
-            SendView()
-                .tabItem { Label("Send", systemImage: "paperplane") }
-            ReceiveView()
-                .tabItem { Label("Receive", systemImage: "qrcode") }
+        Group {
+            if sizeClass == .regular {
+                NavigationSplitView {
+                    List(WalletSection.allCases, selection: $section) { item in
+                        Label(item.rawValue, systemImage: item.icon)
+                            .badge(item == .inbox ? model.inbox.count : 0)
+                            .tag(item)
+                    }
+                    .navigationTitle(model.environment.name)
+                } detail: {
+                    view(for: section ?? .portfolio)
+                        .frame(maxWidth: 560)
+                        .frame(maxWidth: .infinity)
+                }
+            } else {
+                TabView {
+                    PortfolioView()
+                        .tabItem { Label("Portfolio", systemImage: "creditcard") }
+                    InboxView()
+                        .tabItem { Label("Inbox", systemImage: "tray") }
+                        .badge(model.inbox.count)
+                    SendView()
+                        .tabItem { Label("Send", systemImage: "paperplane") }
+                    ReceiveView()
+                        .tabItem { Label("Receive", systemImage: "qrcode") }
+                }
+            }
         }
         .task { await autoRefresh() }
+    }
+
+    @ViewBuilder
+    private func view(for section: WalletSection) -> some View {
+        switch section {
+        case .portfolio: PortfolioView()
+        case .inbox: InboxView()
+        case .send: SendView()
+        case .receive: ReceiveView()
+        }
     }
 
     /// Polls while the app is foregrounded; the demo loop's inbox-and-accept
@@ -237,6 +285,15 @@ struct ReceiveView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
+                if let partyId = model.partyId, let qr = QRCode.image(for: partyId) {
+                    Image(uiImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 220, height: 220)
+                        .padding(8)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 16))
+                }
                 Text("Your party id")
                     .font(.headline)
                 Text(model.partyId ?? "—")
