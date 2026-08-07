@@ -24,13 +24,17 @@ Strategy and research live in [`docs/`](docs/):
 Roadmap (sequenced in the strategy doc, §6):
 
 1. **Portfolio & sync** — connection, auth, ACS-backed portfolio with
-   offset-resumable streams *(SDK core layer: shipped)*
+   offset-resumable streams *(SDK: shipped in v0.4.0)*
 2. **Transfers & inbox** — CIP-0056 transfers with the propose→accept
-   pending-actions inbox and push notifications
+   pending-actions inbox and push notifications *(SDK: shipped in v0.4.0,
+   live-verified against a real Amulet registry — incl. one-step
+   preapproved transfers; the app's UX on top is this phase's work)*
 3. **Self-custody** — external-party onboarding with Secure Enclave /
-   StrongBox keys *(SDK wallet layer: onboarding + signing proven live)*
-4. **Corporate layer** — approvals, audit export, custody integrations, and
-   a macOS treasury console from the same Swift package
+   StrongBox keys *(SDK: shipped in v0.4.0; enclave verified on physical
+   hardware — StrongBox module pending)*
+4. **Corporate layer** — approvals, audit export, custody integrations
+   *(SDK custody hook + wallet store shipped in v0.4.0)*, and a macOS
+   treasury console from the same Swift package
 
 ## Layout
 
