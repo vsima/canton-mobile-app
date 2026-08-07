@@ -1,0 +1,35 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: app (debug + R8 release)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: canton-mobile-app/android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: canton-mobile-app
+      # Sibling SDK checkout, matching the local development layout that
+      # android/settings.gradle.kts's includeBuild path expects.
+      - uses: actions/checkout@v4
+        with:
+          repository: vsima/canton-mobile-sdk
+          path: canton-mobile-sdk
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        run: ./gradlew :app:assembleDebug :app:assembleRelease
