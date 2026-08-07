@@ -17,9 +17,23 @@ targets:
     dependencies:
       - package: canton-mobile-sdk
         product: CantonKit
+      - package: canton-mobile-sdk
+        product: CantonWalletKit
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        # Dev builds talk plaintext to LocalNet on the loopback/LAN. The
+        # exception domain covers scan.localhost/wallet.localhost — ATS
+        # does not exempt .localhost subdomains by default.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            localhost:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.vsima.canton.app
-        GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1"
