@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,8 +64,15 @@ import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material3.Icon
 import androidx.compose.ui.graphics.vector.ImageVector
+import io.github.vsima.canton.wallet.TokenStandardClient
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import java.time.Duration
+import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -196,6 +204,22 @@ private fun WalletTabs(model: WalletModel) {
 
 @Composable
 private fun PortfolioScreen(model: WalletModel) {
+    var showSigner by remember { mutableStateOf(false) }
+    if (showSigner) {
+        AlertDialog(
+            onDismissRequest = { showSigner = false },
+            confirmButton = { TextButton({ showSigner = false }) { Text("Done") } },
+            title = { Text(model.signerLabel) },
+            text = {
+                Text(
+                    if (model.signerLabel.contains("keystore") && !model.signerLabel.contains("emulator"))
+                        "Your signing key was generated inside this device's secure hardware. It cannot be exported, synced, or read — every transaction is signed by the hardware itself.\n\nParty: ${model.partyId}"
+                    else
+                        "Software key for development in the emulator. On a physical device the key is hardware-resident (TEE or StrongBox) and non-exportable.\n\nParty: ${model.partyId}"
+                )
+            },
+        )
+    }
     LazyColumn {
         item {
             Column(Modifier.padding(16.dp)) {
@@ -203,11 +227,9 @@ private fun PortfolioScreen(model: WalletModel) {
                     "${model.totalAmulet.stripTrailingZeros().toPlainString()} CC",
                     style = MaterialTheme.typography.displaySmall,
                 )
-                Text(
-                    "Signer: ${model.signerLabel}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                OutlinedButton(onClick = { showSigner = true }) {
+                    Text(model.signerLabel, style = MaterialTheme.typography.labelMedium)
+                }
                 model.lastError?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
@@ -253,7 +275,7 @@ private fun InboxScreen(model: WalletModel) {
                             Text("“$it”", style = MaterialTheme.typography.bodySmall)
                         }
                         Text(
-                            "expires ${offer.transfer.executeBefore}",
+                            "expires in ${Duration.between(Instant.now(), offer.transfer.executeBefore).toHours()}h",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -279,6 +301,20 @@ private fun InboxScreen(model: WalletModel) {
 @Composable
 private fun SendScreen(model: WalletModel) {
     val scope = rememberCoroutineScope()
+    model.lastSend?.let { receipt ->
+        AlertDialog(
+            onDismissRequest = { model.lastSend = null },
+            confirmButton = { TextButton({ model.lastSend = null }) { Text("Done") } },
+            title = { Text("Transfer submitted") },
+            text = {
+                Text(
+                    "${receipt.amount.stripTrailingZeros().toPlainString()} CC to ${receipt.receiver.take(28)}…" +
+                        (if (receipt.memo.isBlank()) "" else "\n“${receipt.memo}”") +
+                        "\n\nSettles instantly if the receiver is preapproved; otherwise awaits their acceptance."
+                )
+            },
+        )
+    }
     var receiver by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
     var memo by remember { mutableStateOf("") }
@@ -298,7 +334,17 @@ private fun SendScreen(model: WalletModel) {
             onValueChange = { amount = it },
             label = { Text("Amount (CC)") },
             supportingText = {
-                Text("Available: ${model.totalAmulet.stripTrailingZeros().toPlainString()} CC")
+                Row {
+                    Text("Available: ${model.totalAmulet.stripTrailingZeros().toPlainString()} CC")
+                    Spacer(Modifier.size(12.dp))
+                    Text(
+                        "MAX",
+                        modifier = androidx.compose.ui.Modifier.clickable {
+                            amount = model.totalAmulet.stripTrailingZeros().toPlainString()
+                        },
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -341,8 +387,29 @@ private fun ReceiveScreen(model: WalletModel) {
         }
         Text("Your party id", style = MaterialTheme.typography.titleSmall)
         Text(party, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+        val clipboard = LocalClipboardManager.current
+        OutlinedButton(onClick = { clipboard.setText(AnnotatedString(party)) }) {
+            Text("Copy party id")
+        }
+        HorizontalDivider()
+        val scope = rememberCoroutineScope()
+        when {
+            model.preapproval != null -> Text(
+                "⚡ Instant receiving active — transfers settle with no inbox step.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            model.preapprovalRequested -> Text(
+                "Waiting for your validator to approve instant receiving…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> Button(
+                onClick = { scope.launch { model.requestInstantReceive() } },
+                enabled = !model.busy,
+            ) { Text("Enable instant receiving") }
+        }
         Text(
-            "Senders create a transfer to this party; it arrives in your Inbox to accept.",
+            "Senders create a transfer to this party; it arrives in your Inbox to accept — or instantly with preapproval.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -351,6 +418,22 @@ private fun ReceiveScreen(model: WalletModel) {
 
 @Composable
 private fun HistoryScreen(model: WalletModel) {
+    var selected by remember { mutableStateOf<TokenStandardClient.HoldingsChange?>(null) }
+    selected?.let { change ->
+        AlertDialog(
+            onDismissRequest = { selected = null },
+            confirmButton = { TextButton({ selected = null }) { Text("Done") } },
+            title = { Text(if (change.created.isEmpty()) "Sent / spent" else "Received") },
+            text = {
+                Text(
+                    "When: ${change.recordTime}\n" +
+                        change.created.joinToString("") { "Credited: ${it.amount.toPlainString()} ${it.instrumentId.id}\n" } +
+                        (if (change.archivedContractIds.isEmpty()) "" else "Inputs spent: ${change.archivedContractIds.size}\n") +
+                        "\nUpdate id:\n${change.updateId}"
+                )
+            },
+        )
+    }
     LazyColumn {
         if (model.history.isEmpty()) {
             item { ListItem(headlineContent = { Text("No activity yet.") }) }
@@ -360,6 +443,7 @@ private fun HistoryScreen(model: WalletModel) {
                 acc + holding.amount
             }
             ListItem(
+                modifier = Modifier.clickable { selected = change },
                 headlineContent = { Text(if (change.created.isEmpty()) "Sent / spent" else "Received") },
                 supportingContent = {
                     Text(change.recordTime.toString(), style = MaterialTheme.typography.labelSmall)

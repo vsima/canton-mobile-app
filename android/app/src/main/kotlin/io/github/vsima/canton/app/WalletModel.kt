@@ -126,6 +126,13 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         private set
     var busy by mutableStateOf(false)
         private set
+    var lastSend by mutableStateOf<SendReceipt?>(null)
+    var preapproval by mutableStateOf<ScanClient.TransferPreapprovalInfo?>(null)
+        private set
+    var preapprovalRequested by mutableStateOf(false)
+        private set
+
+    data class SendReceipt(val amount: BigDecimal, val receiver: String, val memo: String)
 
     private var channel: ManagedChannel? = null
     private var authedChannel: Channel? = null
@@ -201,6 +208,10 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
                     it.transfer.receiver == party
             }
             history = tokens.holdingsHistory(party).reversed()
+            preapproval = runCatching {
+                ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http)
+                    .transferPreapprovalByParty(party)
+            }.getOrNull()
             lastError = null
             Log.i("WALLET", "holdings=$totalAmulet inbox=${inbox.size} history=${history.size}")
         } catch (error: Exception) {
@@ -233,6 +244,7 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
                 userId = WalletEnvironment.userId,
                 meta = if (memo.isBlank()) emptyMap() else mapOf(MEMO_KEY to memo),
             )
+            lastSend = SendReceipt(amount, receiver, memo)
             Log.i("WALLET", "sent $amount to ${receiver.take(24)}…")
             refresh()
         } catch (error: Exception) {
@@ -263,6 +275,38 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         } catch (error: Exception) {
             lastError = error.toString()
             Log.i("WALLET", "$choice failed: $error")
+        } finally {
+            busy = false
+        }
+    }
+
+    /** "Receive instantly": on-device-signed preapproval request; the
+     *  validator operator accepts and pays (LocalNet dev lookup). */
+    suspend fun requestInstantReceive() {
+        val authed = authedChannel ?: return
+        val driver = driver ?: return
+        val party = allocated ?: return
+        val synchronizer = synchronizerId ?: return
+        busy = true
+        try {
+            val request = okhttp3.Request.Builder()
+                .url("${WalletEnvironment.validatorUrl}/v0/validator-user")
+                .header("Authorization", "Bearer ${WalletEnvironment.unsafeJwt(WalletEnvironment.walletUser)}")
+                .build()
+            val provider = WalletEnvironment.http.newCall(request).execute().use { response ->
+                kotlinx.serialization.json.Json.parseToJsonElement(response.body!!.string())
+                    .let { (it as kotlinx.serialization.json.JsonObject)["party_id"] }
+                    .let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+            }
+            val dso = ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http).dsoPartyId()
+            tokens(authed).requestTransferPreapproval(
+                driver, party, provider, dso, synchronizer, WalletEnvironment.userId,
+            )
+            preapprovalRequested = true
+            Log.i("WALLET", "preapproval requested")
+        } catch (error: Exception) {
+            lastError = error.toString()
+            Log.i("WALLET", "preapproval request failed: $error")
         } finally {
             busy = false
         }
