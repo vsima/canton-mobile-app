@@ -69,6 +69,15 @@ import android.util.Log
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material.icons.automirrored.outlined.CallMade
+import androidx.compose.material.icons.automirrored.outlined.CallReceived
+import androidx.compose.foundation.text.selection.SelectionContainer
+import android.text.format.DateUtils
 import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.vsima.canton.wallet.TokenStandardClient
 import com.google.zxing.BarcodeFormat
@@ -228,18 +237,26 @@ private fun PortfolioScreen(model: WalletModel) {
     }
     LazyColumn {
         item {
-            Column(Modifier.padding(16.dp)) {
-                Text(
-                    "${model.totalAmulet.stripTrailingZeros().toPlainString()} CC",
-                    style = MaterialTheme.typography.displaySmall,
-                )
-                OutlinedButton(onClick = { showSigner = true }) {
-                    Text(model.signerLabel, style = MaterialTheme.typography.labelMedium)
-                }
-                model.lastError?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            ElevatedCard(Modifier.fillMaxWidth().padding(16.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "${model.totalAmulet.stripTrailingZeros().toPlainString()} CC",
+                        style = MaterialTheme.typography.displaySmall,
+                    )
+                    OutlinedButton(onClick = { showSigner = true }) {
+                        Text(model.signerLabel, style = MaterialTheme.typography.labelMedium)
+                    }
+                    model.lastError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
+        }
+        item {
+            SectionHeader(
+                "Holdings",
+                Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+            )
         }
         val groups = model.holdings
             .groupBy { it.instrumentId.id to (it.lock != null) }
@@ -269,6 +286,29 @@ private fun PortfolioScreen(model: WalletModel) {
             )
             HorizontalDivider()
         }
+    }
+}
+
+@Composable
+private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun ReceiptRow(label: String, value: String, mono: Boolean = false) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.weight(1f))
+        Text(
+            value,
+            fontFamily = if (mono) FontFamily.Monospace else null,
+            style = if (mono) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 
@@ -305,7 +345,7 @@ private fun InboxScreen(model: WalletModel) {
                             Text("“$it”", style = MaterialTheme.typography.bodySmall)
                         }
                         Text(
-                            "expires in ${Duration.between(Instant.now(), offer.transfer.executeBefore).toHours()}h",
+                            "expires ${DateUtils.getRelativeTimeSpanString(offer.transfer.executeBefore.toEpochMilli())}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -328,22 +368,47 @@ private fun InboxScreen(model: WalletModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SendScreen(model: WalletModel) {
     val scope = rememberCoroutineScope()
     model.lastSend?.let { receipt ->
-        AlertDialog(
-            onDismissRequest = { model.lastSend = null },
-            confirmButton = { TextButton({ model.lastSend = null }) { Text("Done") } },
-            title = { Text("Transfer submitted") },
-            text = {
-                Text(
-                    "${receipt.amount.stripTrailingZeros().toPlainString()} CC to ${receipt.receiver.take(28)}…" +
-                        (if (receipt.memo.isBlank()) "" else "\n“${receipt.memo}”") +
-                        "\n\nSettles instantly if the receiver is preapproved; otherwise awaits their acceptance."
+        ModalBottomSheet(onDismissRequest = { model.lastSend = null }) {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.CheckCircle,
+                    contentDescription = null,
+                    tint = Color(0xFF2E7D32),
+                    modifier = Modifier.size(56.dp),
                 )
-            },
-        )
+                Text("Transfer submitted", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "It settles instantly if the receiver is preapproved; otherwise it awaits their acceptance.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                HorizontalDivider()
+                ReceiptRow("Amount", "${receipt.amount.stripTrailingZeros().toPlainString()} CC")
+                ReceiptRow("To", receipt.receiver.take(28) + "…", mono = true)
+                if (receipt.memo.isNotBlank()) ReceiptRow("Memo", receipt.memo)
+                ReceiptRow(
+                    "At",
+                    java.time.format.DateTimeFormatter
+                        .ofLocalizedTime(java.time.format.FormatStyle.MEDIUM)
+                        .withZone(java.time.ZoneId.systemDefault())
+                        .format(receipt.at),
+                )
+                Button(
+                    onClick = { model.lastSend = null },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Done") }
+            }
+        }
     }
     var receiver by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
@@ -455,23 +520,63 @@ private fun ReceiveScreen(model: WalletModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryScreen(model: WalletModel) {
     var selected by remember { mutableStateOf<TokenStandardClient.HoldingsChange?>(null) }
     selected?.let { change ->
-        AlertDialog(
-            onDismissRequest = { selected = null },
-            confirmButton = { TextButton({ selected = null }) { Text("Done") } },
-            title = { Text(if (change.created.isEmpty()) "Sent / spent" else "Received") },
-            text = {
+        ModalBottomSheet(onDismissRequest = { selected = null }) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    "When: ${change.recordTime}\n" +
-                        change.created.joinToString("") { "Credited: ${it.amount.toPlainString()} ${it.instrumentId.id}\n" } +
-                        (if (change.archivedContractIds.isEmpty()) "" else "Inputs spent: ${change.archivedContractIds.size}\n") +
-                        "\nUpdate id:\n${change.updateId}"
+                    if (change.created.isEmpty()) "Sent / spent" else "Received",
+                    style = MaterialTheme.typography.titleLarge,
                 )
-            },
-        )
+                SectionHeader("When")
+                Text(
+                    java.time.format.DateTimeFormatter
+                        .ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM)
+                        .withZone(java.time.ZoneId.systemDefault())
+                        .format(change.recordTime),
+                )
+                if (change.created.isNotEmpty()) {
+                    SectionHeader("Credited")
+                    change.created.forEach { holding ->
+                        ReceiptRow(
+                            "${holding.amount.stripTrailingZeros().toPlainString()} ${holding.instrumentId.id}",
+                            holding.contractId.take(16) + "…",
+                            mono = true,
+                        )
+                    }
+                }
+                if (change.archivedContractIds.isNotEmpty()) {
+                    SectionHeader("Spent inputs")
+                    change.archivedContractIds.forEach { cid ->
+                        Text(
+                            cid.take(32) + "…",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                SectionHeader("Update id")
+                SelectionContainer {
+                    Text(
+                        change.updateId,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(
+                    onClick = { selected = null },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Done") }
+            }
+        }
     }
     LazyColumn {
         if (model.history.isEmpty()) {
@@ -481,20 +586,37 @@ private fun HistoryScreen(model: WalletModel) {
             val credited = change.created.fold(java.math.BigDecimal.ZERO) { acc, holding ->
                 acc + holding.amount
             }
+            val received = change.created.isNotEmpty()
             ListItem(
                 modifier = Modifier.clickable { selected = change },
-                headlineContent = { Text(if (change.created.isEmpty()) "Sent / spent" else "Received") },
+                leadingContent = {
+                    Icon(
+                        if (received) Icons.AutoMirrored.Outlined.CallReceived
+                        else Icons.AutoMirrored.Outlined.CallMade,
+                        contentDescription = null,
+                        tint = if (received) Color(0xFF2E7D32)
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                headlineContent = { Text(if (received) "Received" else "Sent / spent") },
                 supportingContent = {
-                    Text(change.recordTime.toString(), style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        DateUtils.getRelativeTimeSpanString(change.recordTime.toEpochMilli()).toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 },
                 trailingContent = {
                     Column(horizontalAlignment = Alignment.End) {
                         if (credited.signum() > 0) {
-                            Text("+${credited.stripTrailingZeros().toPlainString()} CC")
+                            Text(
+                                "+${credited.stripTrailingZeros().toPlainString()} CC",
+                                color = Color(0xFF2E7D32),
+                            )
                         }
                         if (change.archivedContractIds.isNotEmpty()) {
                             Text(
-                                "${change.archivedContractIds.size} inputs spent",
+                                "${change.archivedContractIds.size} input" +
+                                    (if (change.archivedContractIds.size == 1) "" else "s") + " spent",
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }

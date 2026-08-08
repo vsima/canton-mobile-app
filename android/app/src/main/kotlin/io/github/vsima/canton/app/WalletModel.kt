@@ -141,7 +141,12 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
     var preapprovalRequested by mutableStateOf(false)
         private set
 
-    data class SendReceipt(val amount: BigDecimal, val receiver: String, val memo: String)
+    data class SendReceipt(
+        val amount: BigDecimal,
+        val receiver: String,
+        val memo: String,
+        val at: java.time.Instant = java.time.Instant.now(),
+    )
 
     private var channel: ManagedChannel? = null
     private var authedChannel: Channel? = null
