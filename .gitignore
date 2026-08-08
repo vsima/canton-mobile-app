@@ -19,3 +19,4 @@ local.properties
 ios/*.xcodeproj
 ios/DerivedData/
 docs/
+log/
