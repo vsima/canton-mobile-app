@@ -4,7 +4,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Dev builds talk plaintext to LocalNet via the emulator host bridge. -->
-    <application android:label="Canton Wallet" android:usesCleartextTraffic="true">
+    <application
+        android:label="Canton Wallet"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
             android:exported="true">
