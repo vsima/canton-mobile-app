@@ -108,9 +108,9 @@ struct WalletTabsView: View {
                     }
                     .navigationTitle(model.environment.name)
                 } detail: {
+                    // Grouped lists are designed for full pane width (cf.
+                    // Settings on iPad) — no artificial column.
                     view(for: section ?? .portfolio)
-                        .frame(maxWidth: 560)
-                        .frame(maxWidth: .infinity)
                 }
             } else {
                 TabView {
