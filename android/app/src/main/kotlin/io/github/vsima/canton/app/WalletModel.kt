@@ -1,4 +1,3 @@
-import kotlinx.coroutines.launch
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,6 +31,7 @@ import io.grpc.MethodDescriptor
 import io.grpc.okhttp.OkHttpChannelBuilder
 import java.math.BigDecimal
 import java.net.InetAddress
+import kotlinx.coroutines.launch
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import okhttp3.Dns
