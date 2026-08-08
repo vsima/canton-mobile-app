@@ -281,12 +281,12 @@ private fun InboxScreen(model: WalletModel) {
                         )
                         Row {
                             Button(
-                                onClick = { scope.launch { model.accept(offer) } },
+                                onClick = { model.accept(offer) },
                                 enabled = !model.busy,
                             ) { Text("Accept") }
                             Spacer(Modifier.size(8.dp))
                             OutlinedButton(
-                                onClick = { scope.launch { model.reject(offer) } },
+                                onClick = { model.reject(offer) },
                                 enabled = !model.busy,
                             ) { Text("Reject") }
                         }
@@ -357,11 +357,9 @@ private fun SendScreen(model: WalletModel) {
         Button(
             onClick = {
                 val value = amount.toBigDecimalOrNull() ?: return@Button
-                scope.launch {
-                    model.send(receiver.trim(), value, memo)
-                    amount = ""
-                    memo = ""
-                }
+                model.sendAsync(receiver.trim(), value, memo)
+                amount = ""
+                memo = ""
             },
             enabled = !model.busy && receiver.isNotBlank() && amount.toBigDecimalOrNull() != null,
             modifier = Modifier.fillMaxWidth(),
@@ -404,7 +402,7 @@ private fun ReceiveScreen(model: WalletModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             else -> Button(
-                onClick = { scope.launch { model.requestInstantReceive() } },
+                onClick = { model.requestInstantReceiveAsync() },
                 enabled = !model.busy,
             ) { Text("Enable instant receiving") }
         }

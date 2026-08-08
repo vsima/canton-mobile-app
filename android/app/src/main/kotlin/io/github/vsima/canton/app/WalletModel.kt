@@ -1,3 +1,4 @@
+import kotlinx.coroutines.launch
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,6 +104,11 @@ object WalletEnvironment {
 /** Mirror of the iOS WalletModel, on Compose state. `WALLET:` logcat lines
  *  drive the same headless verification loop. */
 class WalletModel(private val prefs: android.content.SharedPreferences) {
+    /** Operations outlive the composables that trigger them: a tapped
+     *  Accept must not die because its row left the screen. */
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate
+    )
     sealed interface Phase {
         data object Fresh : Phase
         data object Onboarding : Phase
@@ -220,9 +226,21 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         }
     }
 
-    suspend fun accept(instruction: TransferInstruction) = exercise(instruction, TransferInstructionChoice.ACCEPT)
+    fun accept(instruction: TransferInstruction) {
+        scope.launch { exercise(instruction, TransferInstructionChoice.ACCEPT) }
+    }
 
-    suspend fun reject(instruction: TransferInstruction) = exercise(instruction, TransferInstructionChoice.REJECT)
+    fun reject(instruction: TransferInstruction) {
+        scope.launch { exercise(instruction, TransferInstructionChoice.REJECT) }
+    }
+
+    fun sendAsync(receiver: String, amount: BigDecimal, memo: String) {
+        scope.launch { send(receiver, amount, memo) }
+    }
+
+    fun requestInstantReceiveAsync() {
+        scope.launch { requestInstantReceive() }
+    }
 
     suspend fun send(receiver: String, amount: BigDecimal, memo: String) {
         val authed = authedChannel ?: return
@@ -293,10 +311,12 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
                 .url("${WalletEnvironment.validatorUrl}/v0/validator-user")
                 .header("Authorization", "Bearer ${WalletEnvironment.unsafeJwt(WalletEnvironment.walletUser)}")
                 .build()
-            val provider = WalletEnvironment.http.newCall(request).execute().use { response ->
+            val provider = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                WalletEnvironment.http.newCall(request).execute().use { response ->
                 kotlinx.serialization.json.Json.parseToJsonElement(response.body!!.string())
                     .let { (it as kotlinx.serialization.json.JsonObject)["party_id"] }
                     .let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+                }
             }
             val dso = ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http).dsoPartyId()
             tokens(authed).requestTransferPreapproval(
