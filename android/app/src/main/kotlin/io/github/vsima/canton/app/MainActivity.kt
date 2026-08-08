@@ -45,6 +45,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.QrCode
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
@@ -65,8 +73,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Section(val label: String) {
-    Portfolio("Portfolio"), Inbox("Inbox"), Send("Send"), Receive("Receive"), History("History")
+private enum class Section(val label: String, val icon: ImageVector) {
+    Portfolio("Portfolio", Icons.Outlined.AccountBalanceWallet),
+    Inbox("Inbox", Icons.Outlined.Inbox),
+    Send("Send", Icons.AutoMirrored.Outlined.Send),
+    Receive("Receive", Icons.Outlined.QrCode),
+    History("History", Icons.Outlined.History),
 }
 
 @Composable
@@ -132,10 +144,10 @@ private fun WalletTabs(model: WalletModel) {
                         icon = {
                             if (item == Section.Inbox && model.inbox.isNotEmpty()) {
                                 BadgedBox(badge = { Badge { Text("${model.inbox.size}") } }) {
-                                    Text(item.label.take(1))
+                                    Icon(item.icon, contentDescription = item.label)
                                 }
                             } else {
-                                Text(item.label.take(1))
+                                Icon(item.icon, contentDescription = item.label)
                             }
                         },
                     )
