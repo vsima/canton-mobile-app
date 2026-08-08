@@ -5,8 +5,10 @@ package io.github.vsima.canton.app
 
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -25,9 +27,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -42,6 +48,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -65,14 +75,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val autoAccept = intent.getBooleanExtra("autoAccept", false)
         intent.getStringExtra("host")?.let { WalletEnvironment.hostBridge = it }
         setContent {
-            MaterialTheme {
+            WalletTheme {
                 WalletApp(model, autoAccept)
             }
         }
     }
+}
+
+/// Material You: the user's dynamic palette on Android 12+, sensible M3
+/// defaults elsewhere, dark scheme from the system setting.
+@Composable
+fun WalletTheme(content: @Composable () -> Unit) {
+    val dark = isSystemInDarkTheme()
+    val context = LocalContext.current
+    val scheme = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        dark -> darkColorScheme()
+        else -> lightColorScheme()
+    }
+    MaterialTheme(colorScheme = scheme, content = content)
 }
 
 private enum class Section(val label: String, val icon: ImageVector) {
@@ -134,36 +160,39 @@ private fun CenteredMessage(title: String, body: String, spinner: Boolean) {
 private fun WalletTabs(model: WalletModel) {
     var section by remember { mutableStateOf(Section.Portfolio) }
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text(section.label) }) },
-        bottomBar = {
-            NavigationBar {
-                Section.entries.forEach { item ->
-                    NavigationBarItem(
-                        selected = section == item,
-                        onClick = { section = item },
-                        label = { Text(item.label) },
-                        icon = {
-                            if (item == Section.Inbox && model.inbox.isNotEmpty()) {
-                                BadgedBox(badge = { Badge { Text("${model.inbox.size}") } }) {
-                                    Icon(item.icon, contentDescription = item.label)
-                                }
-                            } else {
+    // NavigationSuiteScaffold adapts the navigation itself: bottom bar on
+    // phones, navigation rail on tablets/foldables/landscape.
+    NavigationSuiteScaffold(
+        navigationSuiteItems = {
+            Section.entries.forEach { item ->
+                item(
+                    selected = section == item,
+                    onClick = { section = item },
+                    label = { Text(item.label) },
+                    icon = {
+                        if (item == Section.Inbox && model.inbox.isNotEmpty()) {
+                            BadgedBox(badge = { Badge { Text("${model.inbox.size}") } }) {
                                 Icon(item.icon, contentDescription = item.label)
                             }
-                        },
-                    )
-                }
+                        } else {
+                            Icon(item.icon, contentDescription = item.label)
+                        }
+                    },
+                )
             }
         },
-    ) { padding ->
-        Column(Modifier.padding(padding)) {
-            when (section) {
-                Section.Portfolio -> PortfolioScreen(model)
-                Section.Inbox -> InboxScreen(model)
-                Section.Send -> SendScreen(model)
-                Section.Receive -> ReceiveScreen(model)
-                Section.History -> HistoryScreen(model)
+    ) {
+        Scaffold(
+            topBar = { TopAppBar(title = { Text(section.label) }) },
+        ) { padding ->
+            Column(Modifier.padding(padding)) {
+                when (section) {
+                    Section.Portfolio -> PortfolioScreen(model)
+                    Section.Inbox -> InboxScreen(model)
+                    Section.Send -> SendScreen(model)
+                    Section.Receive -> ReceiveScreen(model)
+                    Section.History -> HistoryScreen(model)
+                }
             }
         }
     }
@@ -258,7 +287,10 @@ private fun SendScreen(model: WalletModel) {
     var amount by remember { mutableStateOf("") }
     var memo by remember { mutableStateOf("") }
 
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        Modifier.padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         OutlinedTextField(
             value = receiver,
             onValueChange = { receiver = it },
@@ -300,7 +332,7 @@ private fun ReceiveScreen(model: WalletModel) {
     val party = model.partyId ?: return
     val qr = remember(party) { qrBitmap(party) }
     Column(
-        Modifier.fillMaxWidth().padding(24.dp),
+        Modifier.fillMaxWidth().padding(24.dp).verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
