@@ -59,7 +59,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    private val model = WalletModel()
+    private val model by lazy {
+        WalletModel(getSharedPreferences("wallet", MODE_PRIVATE))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

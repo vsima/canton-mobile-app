@@ -102,7 +102,7 @@ object WalletEnvironment {
 
 /** Mirror of the iOS WalletModel, on Compose state. `WALLET:` logcat lines
  *  drive the same headless verification loop. */
-class WalletModel {
+class WalletModel(private val prefs: android.content.SharedPreferences) {
     sealed interface Phase {
         data object Fresh : Phase
         data object Onboarding : Phase
@@ -154,12 +154,33 @@ class WalletModel {
                 else -> "Software keystore (emulator)"
             }
 
+            // The key lives in the keystore; the party record must persist
+            // beside it or a relaunch re-allocates the same party and the
+            // participant rightly refuses ("already exists").
+            val savedParty = prefs.getString("partyId", null)
+            val savedFingerprint = prefs.getString("fingerprint", null)
+            val savedSynchronizer = prefs.getString("synchronizerId", null)
+            if (savedParty != null && savedFingerprint != null && savedSynchronizer != null) {
+                partyId = savedParty
+                allocated = AllocatedExternalParty(savedParty, savedFingerprint)
+                synchronizerId = savedSynchronizer
+                phase = Phase.Ready
+                Log.i("WALLET", "restored $savedParty signer=$signerLabel")
+                refresh()
+                return
+            }
+
             val parties = ExternalPartyClient(authed)
             val synchronizer = parties.connectedSynchronizers().first()
             synchronizerId = synchronizer
             val party = parties.allocate(keystore, synchronizer, "droidwallet", WalletEnvironment.userId)
             partyId = party.partyId
             allocated = party
+            prefs.edit()
+                .putString("partyId", party.partyId)
+                .putString("fingerprint", party.publicKeyFingerprint)
+                .putString("synchronizerId", synchronizer)
+                .apply()
             phase = Phase.Ready
             Log.i("WALLET", "onboarded ${party.partyId} signer=$signerLabel")
             refresh()
