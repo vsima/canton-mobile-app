@@ -131,6 +131,9 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
     var lastError by mutableStateOf<String?>(null)
         private set
     var busy by mutableStateOf(false)
+    /** Contract ids with an in-flight accept/reject, so only the tapped
+     *  row's buttons disable — not the whole inbox. */
+    var processing by mutableStateOf(setOf<String>())
         private set
     var lastSend by mutableStateOf<SendReceipt?>(null)
     var preapproval by mutableStateOf<ScanClient.TransferPreapprovalInfo?>(null)
@@ -278,7 +281,7 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         val driver = driver ?: return
         val party = allocated ?: return
         val synchronizer = synchronizerId ?: return
-        busy = true
+        processing = processing + instruction.contractId
         try {
             tokens(authed).exerciseTransferInstruction(
                 driver = driver,
@@ -294,7 +297,7 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             lastError = error.toString()
             Log.i("WALLET", "$choice failed: $error")
         } finally {
-            busy = false
+            processing = processing - instruction.contractId
         }
     }
 

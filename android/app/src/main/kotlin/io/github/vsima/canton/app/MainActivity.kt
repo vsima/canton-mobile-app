@@ -63,6 +63,12 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import android.util.Log
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.vsima.canton.wallet.TokenStandardClient
 import com.google.zxing.BarcodeFormat
@@ -235,22 +241,46 @@ private fun PortfolioScreen(model: WalletModel) {
                 }
             }
         }
-        items(model.holdings, key = { it.contractId }) { holding ->
+        val groups = model.holdings
+            .groupBy { it.instrumentId.id to (it.lock != null) }
+            .map { (key, group) ->
+                HoldingGroup(
+                    label = key.first,
+                    locked = key.second,
+                    amount = group.fold(java.math.BigDecimal.ZERO) { acc, h -> acc + h.amount },
+                    count = group.size,
+                    contractId = group.singleOrNull()?.contractId,
+                )
+            }
+            .sortedWith(compareBy({ it.locked }, { it.label }))
+        items(groups, key = { "${it.label}|${it.locked}" }) { group ->
             ListItem(
-                headlineContent = { Text("${holding.amount.toPlainString()} ${holding.instrumentId.id}") },
+                headlineContent = {
+                    Text("${group.amount.stripTrailingZeros().toPlainString()} ${group.label}")
+                },
                 supportingContent = {
                     Text(
-                        holding.contractId.take(24) + "…",
+                        group.contractId?.let { it.take(24) + "…" } ?: "${group.count} holding contracts",
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 },
-                trailingContent = { if (holding.lock != null) Text("locked") },
+                trailingContent = { if (group.locked) Text("locked") },
             )
             HorizontalDivider()
         }
     }
 }
+
+/** Holdings are discrete UTXO-style contracts on the ledger; the portfolio
+ *  rolls them up to one row per instrument (locked apart). */
+private data class HoldingGroup(
+    val label: String,
+    val locked: Boolean,
+    val amount: java.math.BigDecimal,
+    val count: Int,
+    val contractId: String?,
+)
 
 @Composable
 private fun InboxScreen(model: WalletModel) {
@@ -282,12 +312,12 @@ private fun InboxScreen(model: WalletModel) {
                         Row {
                             Button(
                                 onClick = { model.accept(offer) },
-                                enabled = !model.busy,
+                                enabled = offer.contractId !in model.processing,
                             ) { Text("Accept") }
                             Spacer(Modifier.size(8.dp))
                             OutlinedButton(
                                 onClick = { model.reject(offer) },
-                                enabled = !model.busy,
+                                enabled = offer.contractId !in model.processing,
                             ) { Text("Reject") }
                         }
                     }
@@ -323,10 +353,21 @@ private fun SendScreen(model: WalletModel) {
         Modifier.padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        val context = LocalContext.current
         OutlinedTextField(
             value = receiver,
             onValueChange = { receiver = it },
             label = { Text("Recipient party id") },
+            trailingIcon = {
+                IconButton(onClick = {
+                    val options = GmsBarcodeScannerOptions.Builder()
+                        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                        .build()
+                    GmsBarcodeScanning.getClient(context, options).startScan()
+                        .addOnSuccessListener { code -> code.rawValue?.let { receiver = it.trim() } }
+                        .addOnFailureListener { Log.i("WALLET", "scan failed: $it") }
+                }) { Icon(Icons.Outlined.QrCodeScanner, contentDescription = "Scan QR code") }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(

@@ -24,6 +24,7 @@ targets:
       properties:
         UILaunchScreen: {}
         UIUserInterfaceStyle: Light
+        NSCameraUsageDescription: Scan a recipient's QR code to fill in their party id.
         # Dev builds talk plaintext to LocalNet on the loopback/LAN. The
         # exception domain covers scan.localhost/wallet.localhost — ATS
         # does not exempt .localhost subdomains by default.

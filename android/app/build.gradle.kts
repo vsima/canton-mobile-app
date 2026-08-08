@@ -60,4 +60,6 @@ dependencies {
 
     // De-facto standard QR bitmap generation.
     implementation("com.google.zxing:core:3.5.3")
+    // Stock Google scanner activity for reading recipient QR codes.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 }

@@ -32,6 +32,9 @@ final class WalletModel {
     private(set) var history: [TokenStandardClient.HoldingsChange] = []
     private(set) var lastError: String?
     private(set) var busy = false
+    /// Contract ids of transfer instructions with an in-flight accept/reject,
+    /// so only the tapped row's buttons disable — not the whole inbox.
+    private(set) var processing: Set<String> = []
     var lastSend: SendReceipt?
     private(set) var preapproval: ScanClient.TransferPreapprovalInfo?
     private(set) var preapprovalRequested = false
@@ -183,8 +186,8 @@ final class WalletModel {
 
     private func exercise(_ instruction: TransferInstruction, choice: TransferInstructionChoice) async {
         guard let client, let driver, let allocated, let synchronizerId else { return }
-        busy = true
-        defer { busy = false }
+        processing.insert(instruction.contractId)
+        defer { processing.remove(instruction.contractId) }
         do {
             let tokens = TokenStandardClient(client: client, registry: registry())
             try await tokens.exerciseTransferInstruction(

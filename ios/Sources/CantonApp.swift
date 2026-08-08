@@ -183,17 +183,18 @@ struct PortfolioView: View {
                         Text("No holdings yet — receive CC to get started.")
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(model.holdings, id: \.contractId) { holding in
+                    ForEach(holdingGroups) { group in
                         HStack {
                             VStack(alignment: .leading) {
-                                Text("\(holding.amount) \(holding.instrumentId.id)")
+                                Text("\(group.amount as NSDecimalNumber, formatter: Self.amountFormat) \(group.label)")
                                     .font(.body.monospacedDigit())
-                                Text(holding.contractId.prefix(24) + "…")
+                                Text(group.contractId.map { String($0.prefix(24)) + "…" }
+                                    ?? "\(group.count) holding contracts")
                                     .font(.caption2.monospaced())
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if holding.lock != nil {
+                            if group.locked {
                                 Image(systemName: "lock.fill")
                                     .foregroundStyle(.secondary)
                             }
@@ -212,6 +213,32 @@ struct PortfolioView: View {
                 SignerDetailView()
             }
         }
+    }
+
+    /// Holdings are discrete UTXO-style contracts on the ledger; the
+    /// portfolio rolls them up to one row per instrument (locked apart).
+    private struct HoldingGroup: Identifiable {
+        let id: String
+        let label: String
+        let amount: Decimal
+        let count: Int
+        let contractId: String?
+        let locked: Bool
+    }
+
+    private var holdingGroups: [HoldingGroup] {
+        Dictionary(grouping: model.holdings) { "\($0.instrumentId.id)|\($0.lock != nil)" }
+            .map { id, group in
+                HoldingGroup(
+                    id: id,
+                    label: group[0].instrumentId.id,
+                    amount: group.reduce(Decimal.zero) { $0 + (Decimal(string: $1.amount) ?? 0) },
+                    count: group.count,
+                    contractId: group.count == 1 ? group[0].contractId : nil,
+                    locked: group[0].lock != nil
+                )
+            }
+            .sorted { ($0.locked ? 1 : 0, $0.label) < ($1.locked ? 1 : 0, $1.label) }
     }
 
     static let amountFormat: NumberFormatter = {
@@ -260,7 +287,7 @@ struct InboxView: View {
                             }
                             .buttonStyle(.bordered)
                         }
-                        .disabled(model.busy)
+                        .disabled(model.processing.contains(offer.contractId))
                     }
                     .padding(.vertical, 4)
                 }
@@ -276,16 +303,26 @@ struct SendView: View {
     @State private var receiver = ""
     @State private var amount = ""
     @State private var memo = ""
+    @State private var showScanner = false
 
     var body: some View {
         @Bindable var model = model
         NavigationStack {
             Form {
                 Section("To") {
-                    TextField("party id", text: $receiver, axis: .vertical)
-                        .font(.caption.monospaced())
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                    HStack(alignment: .top) {
+                        TextField("party id", text: $receiver, axis: .vertical)
+                            .font(.caption.monospaced())
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        Button {
+                            showScanner = true
+                        } label: {
+                            Image(systemName: "qrcode.viewfinder")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Scan QR code")
+                    }
                 }
                 Section {
                     TextField("0.0", text: $amount)
@@ -321,6 +358,9 @@ struct SendView: View {
             .navigationTitle("Send")
             .sheet(item: $model.lastSend) { receipt in
                 SendConfirmationView(receipt: receipt)
+            }
+            .sheet(isPresented: $showScanner) {
+                QRScannerSheet { receiver = $0 }
             }
         }
     }
