@@ -48,6 +48,7 @@ dependencies {
     // The app builds its own channel + vhost-aware HTTP client.
     implementation("io.grpc:grpc-okhttp:1.83.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
     val composeBom = platform("androidx.compose:compose-bom:2025.01.00")
     implementation(composeBom)
