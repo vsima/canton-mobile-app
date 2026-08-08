@@ -44,7 +44,10 @@ import okhttp3.OkHttpClient
  */
 object WalletEnvironment {
     const val name = "LocalNet"
-    const val hostBridge = "10.0.2.2"
+
+    /** 10.0.2.2 on the emulator; 127.0.0.1 on physical devices with
+     *  `adb reverse` tunnels (set via the MainActivity `host` extra). */
+    var hostBridge = "10.0.2.2"
     const val ledgerPort = 2901
     const val registryUrl = "http://scan.localhost:4000"
     const val scanUrl = "http://scan.localhost:4000/api/scan"

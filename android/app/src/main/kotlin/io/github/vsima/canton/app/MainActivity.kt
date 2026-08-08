@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val autoAccept = intent.getBooleanExtra("autoAccept", false)
+        intent.getStringExtra("host")?.let { WalletEnvironment.hostBridge = it }
         setContent {
             MaterialTheme {
                 WalletApp(model, autoAccept)
