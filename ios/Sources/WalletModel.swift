@@ -29,8 +29,15 @@ final class WalletModel {
     private(set) var signerLabel = ""
     private(set) var holdings: [Holding] = []
     private(set) var inbox: [TransferInstruction] = []
+    private(set) var history: [TokenStandardClient.HoldingsChange] = []
     private(set) var lastError: String?
     private(set) var busy = false
+    var lastSend: SendReceipt?
+    private(set) var preapproval: ScanClient.TransferPreapprovalInfo?
+    private(set) var preapprovalRequested = false
+
+    /// Convention key for human-readable transfer memos in the meta map.
+    static let memoKey = "splice.lfdecentralizedtrust.org/reason"
 
     private var client: CantonClient?
     private var driver: (any SigningDriver)?
@@ -96,8 +103,10 @@ final class WalletModel {
             holdings = try await tokens.listHoldings(partyId: partyId)
             inbox = try await tokens.pendingTransferInstructions(partyId: partyId)
                 .filter { $0.status == .pendingReceiverAcceptance && $0.transfer.receiver == partyId }
+            history = Array(try await tokens.holdingsHistory(partyId: partyId).reversed())
+            preapproval = try? await scan().transferPreapprovalByParty(partyId)
             lastError = nil
-            print("WALLET: holdings=\(totalAmulet) inbox=\(inbox.count)")
+            print("WALLET: holdings=\(totalAmulet) inbox=\(inbox.count) history=\(history.count)")
         } catch {
             lastError = "\(error)"
             print("WALLET: refresh failed: \(error)")
@@ -114,8 +123,16 @@ final class WalletModel {
         await exercise(instruction, choice: .reject)
     }
 
+    struct SendReceipt: Identifiable {
+        let id = UUID()
+        let amount: Decimal
+        let receiver: String
+        let memo: String
+        let at: Date
+    }
+
     /// Sends Amulet to another party (two-step unless they're preapproved).
-    func send(to receiver: String, amount: Decimal) async {
+    func send(to receiver: String, amount: Decimal, memo: String = "") async {
         guard let client, let driver, let allocated, let synchronizerId else { return }
         busy = true
         defer { busy = false }
@@ -133,8 +150,10 @@ final class WalletModel {
                 amount: "\(amount)",
                 inputHoldingCids: inputs.map(\.contractId),
                 synchronizerId: synchronizerId,
-                userId: environment.userId
+                userId: environment.userId,
+                meta: memo.isEmpty ? [:] : [Self.memoKey: memo]
             )
+            lastSend = SendReceipt(amount: amount, receiver: receiver, memo: memo, at: Date())
             print("WALLET: sent \(amount) to \(receiver.prefix(24))…")
             await refresh()
         } catch {
@@ -163,6 +182,55 @@ final class WalletModel {
             lastError = "\(error)"
             print("WALLET: \(choice) failed: \(error)")
         }
+    }
+
+    /// "Receive instantly": requests a transfer preapproval from this
+    /// wallet's validator operator, signed on-device. Acceptance shows up in
+    /// [preapproval] once the operator's automation pays for it.
+    func requestInstantReceive() async {
+        guard let client, let driver, let allocated, let synchronizerId else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let provider = try await operatorParty()
+            let dso = try await scan().dsoPartyId()
+            let tokens = TokenStandardClient(client: client, registry: registry())
+            try await tokens.requestTransferPreapproval(
+                driver: driver,
+                party: allocated,
+                provider: provider,
+                dso: dso,
+                synchronizerId: synchronizerId,
+                userId: environment.userId
+            )
+            preapprovalRequested = true
+            print("WALLET: preapproval requested via \(provider.prefix(24))…")
+        } catch {
+            lastError = "\(error)"
+            print("WALLET: preapproval request failed: \(error)")
+        }
+    }
+
+    /// LocalNet dev lookup: the validator operator party (the preapproval
+    /// provider). Real networks surface this through validator onboarding.
+    private func operatorParty() async throws -> String {
+        var request = URLRequest(url: URL(string: "\(environment.validatorURL)/v0/validator-user")!)
+        request.setValue(
+            "Bearer \(WalletEnvironment.unsafeJWT(sub: "app-user", audience: environment.jwtAudience, secret: environment.unsafeJWTSecret ?? ""))",
+            forHTTPHeaderField: "Authorization"
+        )
+        let (data, _) = try await URLSession.shared.data(for: request)
+        guard
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let party = json["party_id"] as? String
+        else {
+            throw WalletUIError("validator-user lookup failed")
+        }
+        return party
+    }
+
+    private func scan() -> ScanClient {
+        ScanClient(baseURL: URL(string: environment.scanURL)!)
     }
 
     private func registry() -> TransferRegistryClient {

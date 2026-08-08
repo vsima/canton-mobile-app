@@ -15,6 +15,7 @@ struct WalletEnvironment: Sendable {
     let ledgerPort: Int
     let registryURL: String
     let scanURL: String
+    let validatorURL: String
     let userId: String
     /// Dev-only: mints the LocalNet `unsafe-jwt-hmac-256` token in-app.
     /// Anything beyond LocalNet must inject a real token provider instead.
@@ -34,6 +35,7 @@ struct WalletEnvironment: Sendable {
             ledgerPort: env["CANTON_PORT"].flatMap(Int.init) ?? 2901,
             registryURL: env["CANTON_REGISTRY_URL"] ?? "http://scan.localhost:4000",
             scanURL: env["CANTON_SCAN_URL"] ?? "http://scan.localhost:4000/api/scan",
+            validatorURL: env["CANTON_VALIDATOR_URL"] ?? "http://wallet.localhost:2000/api/validator",
             userId: env["CANTON_USER"] ?? "ledger-api-user",
             unsafeJWTSecret: "unsafe",
             jwtAudience: "https://canton.network.global"

@@ -76,6 +76,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
     case inbox = "Inbox"
     case send = "Send"
     case receive = "Receive"
+    case history = "History"
 
     var id: String { rawValue }
     var icon: String {
@@ -84,6 +85,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
         case .inbox: "tray"
         case .send: "paperplane"
         case .receive: "qrcode"
+        case .history: "clock"
         }
     }
 }
@@ -121,6 +123,8 @@ struct WalletTabsView: View {
                         .tabItem { Label("Send", systemImage: "paperplane") }
                     ReceiveView()
                         .tabItem { Label("Receive", systemImage: "qrcode") }
+                    HistoryView()
+                        .tabItem { Label("History", systemImage: "clock") }
                 }
             }
         }
@@ -134,6 +138,7 @@ struct WalletTabsView: View {
         case .inbox: InboxView()
         case .send: SendView()
         case .receive: ReceiveView()
+        case .history: HistoryView()
         }
     }
 
@@ -153,6 +158,7 @@ struct WalletTabsView: View {
 
 struct PortfolioView: View {
     @Environment(WalletModel.self) private var model
+    @State private var showSigner = false
 
     var body: some View {
         NavigationStack {
@@ -161,9 +167,14 @@ struct PortfolioView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(model.totalAmulet as NSDecimalNumber, formatter: Self.amountFormat) CC")
                             .font(.system(size: 34, weight: .bold, design: .rounded))
-                        Text("Signer: \(model.signerLabel)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Button {
+                            showSigner = true
+                        } label: {
+                            Label(model.signerLabel, systemImage: "lock.shield")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                     .padding(.vertical, 8)
                 }
@@ -197,6 +208,9 @@ struct PortfolioView: View {
             }
             .navigationTitle(model.environment.name)
             .refreshable { await model.refresh() }
+            .sheet(isPresented: $showSigner) {
+                SignerDetailView()
+            }
         }
     }
 
@@ -225,6 +239,17 @@ struct InboxView: View {
                         Text("from \(offer.transfer.sender.prefix(30))…")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
+                        if let memo = offer.transfer.meta[WalletModel.memoKey], !memo.isEmpty {
+                            Label(memo, systemImage: "text.quote")
+                                .font(.caption)
+                        }
+                        Label {
+                            Text("Expires \(offer.transfer.executeBefore, style: .relative)")
+                        } icon: {
+                            Image(systemName: "hourglass")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         HStack {
                             Button("Accept") {
                                 Task { await model.accept(offer) }
@@ -250,8 +275,10 @@ struct SendView: View {
     @Environment(WalletModel.self) private var model
     @State private var receiver = ""
     @State private var amount = ""
+    @State private var memo = ""
 
     var body: some View {
+        @Bindable var model = model
         NavigationStack {
             Form {
                 Section("To") {
@@ -260,21 +287,41 @@ struct SendView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
-                Section("Amount (CC)") {
+                Section {
                     TextField("0.0", text: $amount)
                         .keyboardType(.decimalPad)
+                } header: {
+                    Text("Amount (CC)")
+                } footer: {
+                    HStack {
+                        Text("Available: \(model.totalAmulet as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
+                        Spacer()
+                        Button("Max") { amount = "\(model.totalAmulet)" }
+                            .font(.caption)
+                    }
+                }
+                Section("Memo (optional)") {
+                    TextField("What's it for?", text: $memo)
                 }
                 Button(model.busy ? "Sending…" : "Send") {
                     Task {
                         if let value = Decimal(string: amount) {
-                            await model.send(to: receiver.trimmingCharacters(in: .whitespacesAndNewlines), amount: value)
+                            await model.send(
+                                to: receiver.trimmingCharacters(in: .whitespacesAndNewlines),
+                                amount: value,
+                                memo: memo
+                            )
                             amount = ""
+                            memo = ""
                         }
                     }
                 }
                 .disabled(model.busy || receiver.isEmpty || Decimal(string: amount) == nil)
             }
             .navigationTitle("Send")
+            .sheet(item: $model.lastSend) { receipt in
+                SendConfirmationView(receipt: receipt)
+            }
         }
     }
 }
@@ -284,6 +331,19 @@ struct ReceiveView: View {
 
     var body: some View {
         NavigationStack {
+            Form {
+                Section {
+                    receiveCard
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                }
+                InstantReceiveSection()
+            }
+            .navigationTitle("Receive")
+        }
+    }
+
+    private var receiveCard: some View {
             VStack(spacing: 20) {
                 if let partyId = model.partyId, let qr = QRCode.image(for: partyId) {
                     Image(uiImage: qr)
@@ -308,13 +368,11 @@ struct ReceiveView: View {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.bordered)
-                Text("Senders create a transfer to this party; it arrives in your Inbox to accept — or instantly once preapprovals are set up.")
+                Text("Senders create a transfer to this party; it arrives in your Inbox to accept — or instantly with preapproval below.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            .padding(24)
-            .navigationTitle("Receive")
-        }
+            .padding(.vertical, 8)
     }
 }
