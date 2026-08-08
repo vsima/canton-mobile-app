@@ -74,6 +74,7 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Switch
 import androidx.compose.material.icons.automirrored.outlined.CallMade
 import androidx.compose.material.icons.automirrored.outlined.CallReceived
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -217,23 +218,48 @@ private fun WalletTabs(model: WalletModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PortfolioScreen(model: WalletModel) {
     var showSigner by remember { mutableStateOf(false) }
     if (showSigner) {
-        AlertDialog(
-            onDismissRequest = { showSigner = false },
-            confirmButton = { TextButton({ showSigner = false }) { Text("Done") } },
-            title = { Text(model.signerLabel) },
-            text = {
-                Text(
-                    if (model.signerLabel.contains("keystore") && !model.signerLabel.contains("emulator"))
-                        "Your signing key was generated inside this device's secure hardware. It cannot be exported, synced, or read — every transaction is signed by the hardware itself.\n\nParty: ${model.partyId}"
-                    else
-                        "Software key for development in the emulator. On a physical device the key is hardware-resident (TEE or StrongBox) and non-exportable.\n\nParty: ${model.partyId}"
-                )
-            },
-        )
+        ModalBottomSheet(onDismissRequest = { showSigner = false }) {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(model.signerLabel, style = MaterialTheme.typography.titleLarge)
+                SectionHeader("What this means")
+                if (model.signerLabel.contains("keystore") && !model.signerLabel.contains("emulator")) {
+                    Text(
+                        "Your signing key was generated inside this device's secure hardware. " +
+                            "It cannot be exported, synced, backed up, or read — by this app, by Google, " +
+                            "or by anyone. Every transaction is signed by the hardware itself."
+                    )
+                    Text(
+                        "Keys that sync between devices leave the hardware as encrypted blobs. This one never does.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "Software key for development in the emulator. On a physical device the key is " +
+                            "hardware-resident (TEE or StrongBox) and non-exportable."
+                    )
+                }
+                SectionHeader("Party")
+                SelectionContainer {
+                    Text(
+                        model.partyId ?: "—",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(
+                    onClick = { showSigner = false },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Done") }
+            }
+        }
     }
     LazyColumn {
         item {
@@ -478,44 +504,75 @@ private fun ReceiveScreen(model: WalletModel) {
     val party = model.partyId ?: return
     val qr = remember(party) { qrBitmap(party) }
     Column(
-        Modifier.fillMaxWidth().padding(24.dp).verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        Modifier.fillMaxWidth().padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        qr?.let {
-            Image(
-                bitmap = it.asImageBitmap(),
-                contentDescription = "Party id QR code",
-                modifier = Modifier.size(220.dp),
-            )
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.fillMaxWidth().padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                qr?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = "Party id QR code",
+                        modifier = Modifier.size(220.dp),
+                    )
+                }
+                Text("Your party id", style = MaterialTheme.typography.titleSmall)
+                Text(party, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                val clipboard = LocalClipboardManager.current
+                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(party)) }) {
+                    Text("Copy party id")
+                }
+                Text(
+                    "Senders create a transfer to this party; it arrives in your Inbox to accept — or instantly with preapproval below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-        Text("Your party id", style = MaterialTheme.typography.titleSmall)
-        Text(party, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-        val clipboard = LocalClipboardManager.current
-        OutlinedButton(onClick = { clipboard.setText(AnnotatedString(party)) }) {
-            Text("Copy party id")
-        }
-        HorizontalDivider()
-        val scope = rememberCoroutineScope()
-        when {
-            model.preapproval != null -> Text(
-                "⚡ Instant receiving active — transfers settle with no inbox step.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            model.preapprovalRequested -> Text(
-                "Waiting for your validator to approve instant receiving…",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            else -> Button(
-                onClick = { model.requestInstantReceiveAsync() },
-                enabled = !model.busy,
-            ) { Text("Enable instant receiving") }
-        }
-        Text(
-            "Senders create a transfer to this party; it arrives in your Inbox to accept — or instantly with preapproval.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        SectionHeader("Receive instantly", Modifier.padding(top = 8.dp))
+        val waiting = model.preapprovalRequested && model.preapproval == null
+        ListItem(
+            headlineContent = { Text("Instant receiving") },
+            supportingContent = {
+                Column {
+                    Text(
+                        when {
+                            model.preapproval != null ->
+                                "Transfers to you settle in one step — no acceptance needed."
+                            waiting -> "Waiting for your validator to approve…"
+                            else -> "Asks your validator to preapprove incoming transfers. Signed on-device."
+                        }
+                    )
+                    model.preapproval?.expiresAt?.let {
+                        Text(
+                            "Renews " + java.time.format.DateTimeFormatter
+                                .ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)
+                                .withZone(java.time.ZoneId.systemDefault())
+                                .format(it),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+            trailingContent = {
+                if (waiting) {
+                    CircularProgressIndicator(Modifier.size(24.dp))
+                } else {
+                    Switch(
+                        checked = model.preapproval != null,
+                        onCheckedChange = { on ->
+                            if (on) model.requestInstantReceiveAsync()
+                            else model.cancelInstantReceiveAsync()
+                        },
+                        enabled = !model.busy,
+                    )
+                }
+            },
         )
     }
 }

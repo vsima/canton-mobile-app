@@ -139,6 +139,9 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
     var preapproval by mutableStateOf<ScanClient.TransferPreapprovalInfo?>(null)
         private set
     var preapprovalRequested by mutableStateOf(false)
+    /** Scan lags the ledger briefly after a cancel; skip re-reading the
+     *  preapproval until then so the switch doesn't bounce back on. */
+    private var preapprovalSuppressedUntil: java.time.Instant = java.time.Instant.EPOCH
         private set
 
     data class SendReceipt(
@@ -222,10 +225,12 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
                     it.transfer.receiver == party
             }
             history = tokens.holdingsHistory(party).reversed()
-            preapproval = runCatching {
-                ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http)
-                    .transferPreapprovalByParty(party)
-            }.getOrNull()
+            if (java.time.Instant.now() > preapprovalSuppressedUntil) {
+                preapproval = runCatching {
+                    ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http)
+                        .transferPreapprovalByParty(party)
+                }.getOrNull()
+            }
             lastError = null
             Log.i("WALLET", "holdings=$totalAmulet inbox=${inbox.size} history=${history.size}")
         } catch (error: Exception) {
@@ -248,6 +253,40 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
 
     fun requestInstantReceiveAsync() {
         scope.launch { requestInstantReceive() }
+    }
+
+    fun cancelInstantReceiveAsync() {
+        scope.launch { cancelInstantReceive() }
+    }
+
+    /** Turns instant receiving off — archives the preapproval, signed
+     *  on-device (the receiver may cancel unilaterally). */
+    suspend fun cancelInstantReceive() {
+        val authed = authedChannel ?: return
+        val driver = driver ?: return
+        val party = allocated ?: return
+        val synchronizer = synchronizerId ?: return
+        val cid = preapproval?.contractId ?: return
+        busy = true
+        try {
+            tokens(authed).cancelTransferPreapproval(
+                driver = driver,
+                party = party,
+                preapprovalCid = cid,
+                synchronizerId = synchronizer,
+                userId = WalletEnvironment.userId,
+            )
+            preapproval = null
+            preapprovalRequested = false
+            preapprovalSuppressedUntil = java.time.Instant.now().plusSeconds(30)
+            Log.i("WALLET", "preapproval cancelled")
+            refresh()
+        } catch (error: Exception) {
+            lastError = error.toString()
+            Log.i("WALLET", "preapproval cancel failed: $error")
+        } finally {
+            busy = false
+        }
     }
 
     suspend fun send(receiver: String, amount: BigDecimal, memo: String) {

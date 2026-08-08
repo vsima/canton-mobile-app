@@ -213,30 +213,36 @@ struct InstantReceiveSection: View {
     @Environment(WalletModel.self) private var model
 
     var body: some View {
-        Section("Receive instantly") {
-            if let preapproval = model.preapproval {
-                Label("Active", systemImage: "bolt.fill")
-                    .foregroundStyle(.green)
-                if let expiresAt = preapproval.expiresAt {
-                    LabeledContent("Renews", value: expiresAt.formatted(date: .abbreviated, time: .omitted))
-                }
-                Text("Transfers to you settle in one step — no acceptance needed.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else if model.preapprovalRequested {
+        Section {
+            if model.preapprovalRequested && model.preapproval == nil {
                 Label("Waiting for your validator to approve…", systemImage: "hourglass")
                     .foregroundStyle(.secondary)
             } else {
-                Button {
-                    Task { await model.requestInstantReceive() }
-                } label: {
-                    Label("Enable instant receiving", systemImage: "bolt")
+                Toggle(isOn: Binding(
+                    get: { model.preapproval != nil },
+                    set: { on in
+                        Task {
+                            if on {
+                                await model.requestInstantReceive()
+                            } else {
+                                await model.cancelInstantReceive()
+                            }
+                        }
+                    }
+                )) {
+                    Label("Instant receiving", systemImage: "bolt")
                 }
                 .disabled(model.busy)
-                Text("Asks your validator to preapprove incoming transfers, so they settle without an inbox step. Signed on-device.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if let expiresAt = model.preapproval?.expiresAt {
+                    LabeledContent("Renews", value: expiresAt.formatted(date: .abbreviated, time: .omitted))
+                }
             }
+        } header: {
+            Text("Receive instantly")
+        } footer: {
+            Text(model.preapproval != nil
+                ? "Transfers to you settle in one step — no acceptance needed. Turning this off archives the preapproval, signed on-device."
+                : "Asks your validator to preapprove incoming transfers, so they settle without an inbox step. Signed on-device.")
         }
     }
 }

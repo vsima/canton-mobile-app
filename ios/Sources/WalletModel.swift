@@ -38,6 +38,9 @@ final class WalletModel {
     var lastSend: SendReceipt?
     private(set) var preapproval: ScanClient.TransferPreapprovalInfo?
     private(set) var preapprovalRequested = false
+    /// Scan lags the ledger briefly after a cancel; skip re-reading the
+    /// preapproval until then so the toggle doesn't bounce back on.
+    private var preapprovalSuppressedUntil = Date.distantPast
 
     /// Convention key for human-readable transfer memos in the meta map.
     static let memoKey = "splice.lfdecentralizedtrust.org/reason"
@@ -126,7 +129,9 @@ final class WalletModel {
             inbox = try await tokens.pendingTransferInstructions(partyId: partyId)
                 .filter { $0.status == .pendingReceiverAcceptance && $0.transfer.receiver == partyId }
             history = Array(try await tokens.holdingsHistory(partyId: partyId).reversed())
-            preapproval = try? await scan().transferPreapprovalByParty(partyId)
+            if Date() > preapprovalSuppressedUntil {
+                preapproval = try? await scan().transferPreapprovalByParty(partyId)
+            }
             lastError = nil
             print("WALLET: holdings=\(totalAmulet) inbox=\(inbox.count) history=\(history.count)")
         } catch {
@@ -230,6 +235,33 @@ final class WalletModel {
         } catch {
             lastError = "\(error)"
             print("WALLET: preapproval request failed: \(error)")
+        }
+    }
+
+    /// Turns instant receiving off — archives the preapproval, signed
+    /// on-device (the receiver may cancel unilaterally).
+    func cancelInstantReceive() async {
+        guard let client, let driver, let allocated, let synchronizerId,
+              let cid = preapproval?.contractId else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let tokens = TokenStandardClient(client: client, registry: registry())
+            try await tokens.cancelTransferPreapproval(
+                driver: driver,
+                party: allocated,
+                preapprovalCid: cid,
+                synchronizerId: synchronizerId,
+                userId: environment.userId
+            )
+            preapproval = nil
+            preapprovalRequested = false
+            preapprovalSuppressedUntil = Date().addingTimeInterval(30)
+            print("WALLET: preapproval cancelled")
+            await refresh()
+        } catch {
+            lastError = "\(error)"
+            print("WALLET: preapproval cancel failed: \(error)")
         }
     }
 
