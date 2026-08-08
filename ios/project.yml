@@ -23,6 +23,7 @@ targets:
       path: Info.plist
       properties:
         UILaunchScreen: {}
+        UIUserInterfaceStyle: Light
         # Dev builds talk plaintext to LocalNet on the loopback/LAN. The
         # exception domain covers scan.localhost/wallet.localhost — ATS
         # does not exempt .localhost subdomains by default.

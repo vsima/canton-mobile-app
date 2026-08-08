@@ -86,18 +86,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/// Material You: the user's dynamic palette on Android 12+, sensible M3
-/// defaults elsewhere, dark scheme from the system setting.
+/// Light-only by product choice: Material You's light dynamic palette on
+/// Android 12+, the M3 light scheme elsewhere.
 @Composable
 fun WalletTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
     val context = LocalContext.current
-    val scheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> darkColorScheme()
-        else -> lightColorScheme()
-    }
+    val scheme =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) dynamicLightColorScheme(context)
+        else lightColorScheme()
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
