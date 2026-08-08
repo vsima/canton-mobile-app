@@ -81,12 +81,17 @@ struct WalletEnvironment: Sendable {
 enum SignerFactory {
     static func make(restoring handle: Data?) throws -> (driver: any SigningDriver, handle: Data?, label: String) {
         if SecureEnclaveSigningDriver.isAvailable {
+            #if targetEnvironment(simulator)
+            let label = "Simulated Secure Enclave"
+            #else
+            let label = "Secure Enclave"
+            #endif
             if let handle {
                 let driver = try SecureEnclaveSigningDriver(dataRepresentation: handle)
-                return (driver, handle, "Secure Enclave")
+                return (driver, handle, label)
             }
             let driver = try SecureEnclaveSigningDriver()
-            return (driver, driver.dataRepresentation, "Secure Enclave")
+            return (driver, driver.dataRepresentation, label)
         }
         // Simulator: software key, regenerated per install (dev only).
         return (SoftwareSigningDriver.generate(.ecP256), nil, "software P-256 (simulator)")

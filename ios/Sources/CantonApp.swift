@@ -206,7 +206,7 @@ struct PortfolioView: View {
                     }
                 }
             }
-            .navigationTitle(model.environment.name)
+            .navigationTitle("Portfolio")
             .refreshable { await model.refresh() }
             .sheet(isPresented: $showSigner) {
                 SignerDetailView()

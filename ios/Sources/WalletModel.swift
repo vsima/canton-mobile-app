@@ -43,7 +43,7 @@ final class WalletModel {
     private var driver: (any SigningDriver)?
     private var allocated: AllocatedExternalParty?
     private var synchronizerId: String?
-    private let store = InMemoryWalletStore()
+    private let store = KeychainWalletStore(service: "io.github.vsima.canton.app.wallet")
 
     var totalAmulet: Decimal {
         holdings.reduce(Decimal.zero) { total, holding in
@@ -58,6 +58,25 @@ final class WalletModel {
         do {
             let client = environment.makeClient()
             self.client = client
+
+            // Restore an existing wallet identity before minting a new one:
+            // the party is already allocated on the ledger; only the signer
+            // needs reviving from its keychain-held handle.
+            if let record = try? await store.list().first, let handle = record.keyHandle {
+                let (driver, _, label) = try SignerFactory.make(restoring: handle)
+                self.driver = driver
+                self.signerLabel = label
+                self.partyId = record.partyId
+                self.allocated = AllocatedExternalParty(
+                    partyId: record.partyId,
+                    publicKeyFingerprint: record.publicKeyFingerprint
+                )
+                self.synchronizerId = record.synchronizerId
+                phase = .ready
+                print("WALLET: restored \(record.partyId) signer=\(label)")
+                await refresh()
+                return
+            }
 
             let (driver, handle, label) = try SignerFactory.make(restoring: nil)
             self.driver = driver

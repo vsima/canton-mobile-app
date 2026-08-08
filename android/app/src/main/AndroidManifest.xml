@@ -3,7 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <application android:label="Canton App">
+    <!-- Dev builds talk plaintext to LocalNet via the emulator host bridge. -->
+    <application android:label="Canton Wallet" android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true">

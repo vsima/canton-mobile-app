@@ -1,61 +1,358 @@
+// Copyright (c) 2026 Victor Sima
+// SPDX-License-Identifier: Apache-2.0
+
 package io.github.vsima.canton.app
 
-import android.app.Activity
+import android.graphics.Bitmap
 import android.os.Bundle
-import android.view.Gravity
-import android.widget.TextView
-import io.github.vsima.canton.CantonClient
-import io.github.vsima.canton.CantonClientConfiguration
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.cancel
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-/**
- * Placeholder first screen: connects to a Canton participant and shows the
- * Ledger API version, proving the SDK wiring end to end. Defaults to
- * 10.0.2.2 (the emulator's host loopback) so it can reach a local node
- * started with the SDK's `integration/run-canton.sh`.
- */
-class MainActivity : Activity() {
-
-    private val scope = MainScope()
+class MainActivity : ComponentActivity() {
+    private val model = WalletModel()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val status = TextView(this)
-        status.text = "Connecting to ledger…"
-        status.textSize = 16f
-        status.setPadding(48, 48, 48, 48)
-        // Center in the window: API 35+ lays content out edge-to-edge, so
-        // top-aligned text would sit behind the system/app bars.
-        status.gravity = Gravity.CENTER
-        // Explicit colors so the label is legible regardless of system theme.
-        status.setTextColor(0xFF202124.toInt())
-        status.setBackgroundColor(0xFFFFFFFF.toInt())
-        setContentView(status)
-
-        scope.launch {
-            status.text = try {
-                val version = withContext(Dispatchers.IO) {
-                    CantonClient(
-                        CantonClientConfiguration(
-                            host = "10.0.2.2",
-                            port = 6865,
-                            useTls = false,
-                        )
-                    ).use { it.ledgerApiVersion() }
-                }
-                "Ledger API version: $version"
-            } catch (e: Exception) {
-                "Could not reach ledger: ${e.message}"
+        val autoAccept = intent.getBooleanExtra("autoAccept", false)
+        setContent {
+            MaterialTheme {
+                WalletApp(model, autoAccept)
             }
         }
     }
+}
 
-    override fun onDestroy() {
-        scope.cancel()
-        super.onDestroy()
+private enum class Section(val label: String) {
+    Portfolio("Portfolio"), Inbox("Inbox"), Send("Send"), Receive("Receive"), History("History")
+}
+
+@Composable
+fun WalletApp(model: WalletModel, autoAccept: Boolean) {
+    LaunchedEffect(Unit) {
+        model.onboard()
+        while (true) {
+            model.refresh()
+            if (autoAccept) {
+                model.inbox.firstOrNull()?.let { model.accept(it) }
+            }
+            delay(3_000)
+        }
     }
+
+    when (val phase = model.phase) {
+        WalletModel.Phase.Fresh, WalletModel.Phase.Onboarding -> CenteredMessage(
+            title = "Creating your wallet…",
+            body = "A signing key is being generated in this device's keystore and registered as your Canton party.",
+            spinner = true,
+        )
+        is WalletModel.Phase.Failed -> CenteredMessage(
+            title = "Can't reach ${WalletEnvironment.name}",
+            body = phase.message,
+            spinner = false,
+        )
+        WalletModel.Phase.Ready -> WalletTabs(model)
+    }
+}
+
+@Composable
+private fun CenteredMessage(title: String, body: String, spinner: Boolean) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (spinner) CircularProgressIndicator()
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+        Text(
+            body,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WalletTabs(model: WalletModel) {
+    var section by remember { mutableStateOf(Section.Portfolio) }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(section.label) }) },
+        bottomBar = {
+            NavigationBar {
+                Section.entries.forEach { item ->
+                    NavigationBarItem(
+                        selected = section == item,
+                        onClick = { section = item },
+                        label = { Text(item.label) },
+                        icon = {
+                            if (item == Section.Inbox && model.inbox.isNotEmpty()) {
+                                BadgedBox(badge = { Badge { Text("${model.inbox.size}") } }) {
+                                    Text(item.label.take(1))
+                                }
+                            } else {
+                                Text(item.label.take(1))
+                            }
+                        },
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        Column(Modifier.padding(padding)) {
+            when (section) {
+                Section.Portfolio -> PortfolioScreen(model)
+                Section.Inbox -> InboxScreen(model)
+                Section.Send -> SendScreen(model)
+                Section.Receive -> ReceiveScreen(model)
+                Section.History -> HistoryScreen(model)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortfolioScreen(model: WalletModel) {
+    LazyColumn {
+        item {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    "${model.totalAmulet.stripTrailingZeros().toPlainString()} CC",
+                    style = MaterialTheme.typography.displaySmall,
+                )
+                Text(
+                    "Signer: ${model.signerLabel}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                model.lastError?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        items(model.holdings, key = { it.contractId }) { holding ->
+            ListItem(
+                headlineContent = { Text("${holding.amount.toPlainString()} ${holding.instrumentId.id}") },
+                supportingContent = {
+                    Text(
+                        holding.contractId.take(24) + "…",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                },
+                trailingContent = { if (holding.lock != null) Text("locked") },
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun InboxScreen(model: WalletModel) {
+    val scope = rememberCoroutineScope()
+    LazyColumn {
+        if (model.inbox.isEmpty()) {
+            item { ListItem(headlineContent = { Text("No pending offers.") }) }
+        }
+        items(model.inbox, key = { it.contractId }) { offer ->
+            ListItem(
+                headlineContent = {
+                    Text("${offer.transfer.amount.toPlainString()} ${offer.transfer.instrumentId.id}")
+                },
+                supportingContent = {
+                    Column {
+                        Text(
+                            "from ${offer.transfer.sender.take(30)}…",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        offer.transfer.meta[WalletModel.MEMO_KEY]?.takeIf { it.isNotBlank() }?.let {
+                            Text("“$it”", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "expires ${offer.transfer.executeBefore}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row {
+                            Button(
+                                onClick = { scope.launch { model.accept(offer) } },
+                                enabled = !model.busy,
+                            ) { Text("Accept") }
+                            Spacer(Modifier.size(8.dp))
+                            OutlinedButton(
+                                onClick = { scope.launch { model.reject(offer) } },
+                                enabled = !model.busy,
+                            ) { Text("Reject") }
+                        }
+                    }
+                },
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun SendScreen(model: WalletModel) {
+    val scope = rememberCoroutineScope()
+    var receiver by remember { mutableStateOf("") }
+    var amount by remember { mutableStateOf("") }
+    var memo by remember { mutableStateOf("") }
+
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedTextField(
+            value = receiver,
+            onValueChange = { receiver = it },
+            label = { Text("Recipient party id") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = amount,
+            onValueChange = { amount = it },
+            label = { Text("Amount (CC)") },
+            supportingText = {
+                Text("Available: ${model.totalAmulet.stripTrailingZeros().toPlainString()} CC")
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = memo,
+            onValueChange = { memo = it },
+            label = { Text("Memo (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = {
+                val value = amount.toBigDecimalOrNull() ?: return@Button
+                scope.launch {
+                    model.send(receiver.trim(), value, memo)
+                    amount = ""
+                    memo = ""
+                }
+            },
+            enabled = !model.busy && receiver.isNotBlank() && amount.toBigDecimalOrNull() != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (model.busy) "Sending…" else "Send") }
+    }
+}
+
+@Composable
+private fun ReceiveScreen(model: WalletModel) {
+    val party = model.partyId ?: return
+    val qr = remember(party) { qrBitmap(party) }
+    Column(
+        Modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        qr?.let {
+            Image(
+                bitmap = it.asImageBitmap(),
+                contentDescription = "Party id QR code",
+                modifier = Modifier.size(220.dp),
+            )
+        }
+        Text("Your party id", style = MaterialTheme.typography.titleSmall)
+        Text(party, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+        Text(
+            "Senders create a transfer to this party; it arrives in your Inbox to accept.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun HistoryScreen(model: WalletModel) {
+    LazyColumn {
+        if (model.history.isEmpty()) {
+            item { ListItem(headlineContent = { Text("No activity yet.") }) }
+        }
+        items(model.history, key = { it.updateId }) { change ->
+            val credited = change.created.fold(java.math.BigDecimal.ZERO) { acc, holding ->
+                acc + holding.amount
+            }
+            ListItem(
+                headlineContent = { Text(if (change.created.isEmpty()) "Sent / spent" else "Received") },
+                supportingContent = {
+                    Text(change.recordTime.toString(), style = MaterialTheme.typography.labelSmall)
+                },
+                trailingContent = {
+                    Column(horizontalAlignment = Alignment.End) {
+                        if (credited.signum() > 0) {
+                            Text("+${credited.stripTrailingZeros().toPlainString()} CC")
+                        }
+                        if (change.archivedContractIds.isNotEmpty()) {
+                            Text(
+                                "${change.archivedContractIds.size} inputs spent",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                },
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+private fun qrBitmap(text: String): Bitmap? = try {
+    val size = 512
+    val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, size, size)
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
+    for (x in 0 until size) {
+        for (y in 0 until size) {
+            bitmap.setPixel(
+                x, y,
+                if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE,
+            )
+        }
+    }
+    bitmap
+} catch (_: Exception) {
+    null
 }
