@@ -71,33 +71,75 @@ struct ConnectionFailedView: View {
     }
 }
 
-/// iOS 18's adaptive shell: one TabView, system-rendered as a tab bar on
-/// iPhone and an adaptable sidebar on iPad/Mac — the platform decides, we
-/// declare.
+enum WalletSection: String, CaseIterable, Identifiable {
+    case portfolio = "Portfolio"
+    case inbox = "Inbox"
+    case send = "Send"
+    case receive = "Receive"
+    case history = "History"
+
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .portfolio: "creditcard"
+        case .inbox: "tray"
+        case .send: "paperplane"
+        case .receive: "qrcode"
+        case .history: "clock"
+        }
+    }
+}
+
+/// Adaptive shell: tabs on iPhone, a real sidebar split view on iPad and
+/// Mac — regular-width layouts are first-class, not a stretched phone.
 struct WalletTabsView: View {
     @Environment(WalletModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var section: WalletSection? = .portfolio
 
     var body: some View {
-        TabView {
-            Tab("Portfolio", systemImage: "creditcard") {
-                PortfolioView()
-            }
-            Tab("Inbox", systemImage: "tray") {
-                InboxView()
-            }
-            .badge(model.inbox.count)
-            Tab("Send", systemImage: "paperplane") {
-                SendView()
-            }
-            Tab("Receive", systemImage: "qrcode") {
-                ReceiveView()
-            }
-            Tab("History", systemImage: "clock") {
-                HistoryView()
+        Group {
+            if sizeClass == .regular {
+                NavigationSplitView {
+                    List(WalletSection.allCases, selection: $section) { item in
+                        Label(item.rawValue, systemImage: item.icon)
+                            .badge(item == .inbox ? model.inbox.count : 0)
+                            .tag(item)
+                    }
+                    .navigationTitle(model.environment.name)
+                } detail: {
+                    // Grouped lists are designed for full pane width (cf.
+                    // Settings on iPad) — no artificial column.
+                    view(for: section ?? .portfolio)
+                }
+            } else {
+                TabView {
+                    PortfolioView()
+                        .tabItem { Label("Portfolio", systemImage: "creditcard") }
+                    InboxView()
+                        .tabItem { Label("Inbox", systemImage: "tray") }
+                        .badge(model.inbox.count)
+                    SendView()
+                        .tabItem { Label("Send", systemImage: "paperplane") }
+                    ReceiveView()
+                        .tabItem { Label("Receive", systemImage: "qrcode") }
+                    HistoryView()
+                        .tabItem { Label("History", systemImage: "clock") }
+                }
             }
         }
-        .tabViewStyle(.sidebarAdaptable)
         .task { await autoRefresh() }
+    }
+
+    @ViewBuilder
+    private func view(for section: WalletSection) -> some View {
+        switch section {
+        case .portfolio: PortfolioView()
+        case .inbox: InboxView()
+        case .send: SendView()
+        case .receive: ReceiveView()
+        case .history: HistoryView()
+        }
     }
 
     /// Polls while the app is foregrounded; the demo loop's inbox-and-accept
