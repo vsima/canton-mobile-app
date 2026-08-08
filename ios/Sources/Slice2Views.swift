@@ -108,7 +108,7 @@ struct ChangeDetailView: View {
                         .textSelection(.enabled)
                 }
             }
-            .navigationTitle("Transaction")
+            .navigationTitle(change.created.isEmpty ? "Sent / spent" : "Received")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -142,7 +142,10 @@ struct SendConfirmationView: View {
                     .padding(.vertical, 12)
                 }
                 Section {
-                    LabeledContent("Amount", value: "\(receipt.amount) CC")
+                    LabeledContent(
+                        "Amount",
+                        value: "\(PortfolioView.amountFormat.string(from: receipt.amount as NSDecimalNumber) ?? "\(receipt.amount)") CC"
+                    )
                     LabeledContent("To") {
                         Text(receipt.receiver.prefix(28) + "…")
                             .font(.caption.monospaced())
@@ -177,7 +180,7 @@ struct SignerDetailView: View {
                         .font(.headline)
                 }
                 Section("What this means") {
-                    if model.signerLabel.contains("Enclave") {
+                    if model.signerLabel.contains("Enclave") && !model.signerLabel.contains("Simulated") {
                         Text("Your signing key was generated inside this device's Secure Enclave. It cannot be exported, synced, backed up, or read — by this app, by Apple, or by anyone. Every transaction is signed by the enclave itself.")
                         Text("Keys that sync between devices (e.g. via iCloud Keychain) leave the hardware as encrypted blobs. This one never does.")
                             .foregroundStyle(.secondary)

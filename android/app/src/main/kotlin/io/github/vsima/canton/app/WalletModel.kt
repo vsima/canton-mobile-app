@@ -134,6 +134,9 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
     /** Contract ids with an in-flight accept/reject, so only the tapped
      *  row's buttons disable — not the whole inbox. */
     var processing by mutableStateOf(setOf<String>())
+    /** True when the signing key is hardware-resident (StrongBox or TEE) —
+     *  drives the trust copy, which must never overclaim. */
+    var hardwareSigner by mutableStateOf(false)
         private set
     var lastSend by mutableStateOf<SendReceipt?>(null)
     var preapproval by mutableStateOf<ScanClient.TransferPreapprovalInfo?>(null)
@@ -169,21 +172,39 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             val authed = WalletEnvironment.authed(plain, WalletEnvironment.userId)
             authedChannel = authed
 
-            val keystore = AndroidKeystoreSigningDriver.load("wallet")
-                ?: AndroidKeystoreSigningDriver.generate("wallet")
+            val restoredKey = AndroidKeystoreSigningDriver.load("wallet")
+            val savedParty = prefs.getString("partyId", null)
+            val savedFingerprint = prefs.getString("fingerprint", null)
+            val savedSynchronizer = prefs.getString("synchronizerId", null)
+
+            // A restored party is only usable with the key it was allocated
+            // under. If the keystore entry is gone while the party record
+            // survives, fail loudly instead of pairing the party with a
+            // fresh key that can never sign for it.
+            if (savedParty != null && restoredKey == null) {
+                phase = Phase.Failed(
+                    "The signing key for $savedParty is no longer in the keystore, " +
+                        "so this party can't sign. Clear the app's data to start a fresh wallet."
+                )
+                return
+            }
+
+            val keystore = restoredKey ?: AndroidKeystoreSigningDriver.generate("wallet")
             driver = keystore
             signerLabel = when (keystore.securityLevel) {
                 AndroidKeystoreSigningDriver.SecurityLevel.STRONGBOX -> "StrongBox secure element"
                 AndroidKeystoreSigningDriver.SecurityLevel.TRUSTED_ENVIRONMENT -> "Hardware keystore (TEE)"
                 else -> "Software keystore (emulator)"
             }
+            hardwareSigner = when (keystore.securityLevel) {
+                AndroidKeystoreSigningDriver.SecurityLevel.STRONGBOX,
+                AndroidKeystoreSigningDriver.SecurityLevel.TRUSTED_ENVIRONMENT -> true
+                else -> false
+            }
 
             // The key lives in the keystore; the party record must persist
             // beside it or a relaunch re-allocates the same party and the
             // participant rightly refuses ("already exists").
-            val savedParty = prefs.getString("partyId", null)
-            val savedFingerprint = prefs.getString("fingerprint", null)
-            val savedSynchronizer = prefs.getString("synchronizerId", null)
             if (savedParty != null && savedFingerprint != null && savedSynchronizer != null) {
                 partyId = savedParty
                 allocated = AllocatedExternalParty(savedParty, savedFingerprint)
@@ -195,7 +216,8 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             }
 
             val parties = ExternalPartyClient(authed)
-            val synchronizer = parties.connectedSynchronizers().first()
+            val synchronizer = parties.connectedSynchronizers().firstOrNull()
+                ?: error("no synchronizer reachable at ${WalletEnvironment.hostBridge}")
             synchronizerId = synchronizer
             val party = parties.allocate(keystore, synchronizer, "droidwallet", WalletEnvironment.userId)
             partyId = party.partyId
@@ -360,9 +382,13 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
                 .build()
             val provider = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 WalletEnvironment.http.newCall(request).execute().use { response ->
-                kotlinx.serialization.json.Json.parseToJsonElement(response.body!!.string())
-                    .let { (it as kotlinx.serialization.json.JsonObject)["party_id"] }
-                    .let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+                    val body = response.body?.string()
+                        ?: error("validator-user lookup returned no body")
+                    val json = kotlinx.serialization.json.Json.parseToJsonElement(body)
+                        as? kotlinx.serialization.json.JsonObject
+                        ?: error("validator-user lookup failed: $body")
+                    (json["party_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        ?: error("validator-user lookup failed: $body")
                 }
             }
             val dso = ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http).dsoPartyId()

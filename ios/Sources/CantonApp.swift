@@ -261,7 +261,7 @@ struct InboxView: View {
                 }
                 ForEach(model.inbox, id: \.contractId) { offer in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("\(offer.transfer.amount) \(offer.transfer.instrumentId.id)")
+                        Text("\((Decimal(string: offer.transfer.amount) ?? 0) as NSDecimalNumber, formatter: PortfolioView.amountFormat) \(offer.transfer.instrumentId.id)")
                             .font(.headline.monospacedDigit())
                         Text("from \(offer.transfer.sender.prefix(30))…")
                             .font(.caption.monospaced())
@@ -353,7 +353,11 @@ struct SendView: View {
                         }
                     }
                 }
-                .disabled(model.busy || receiver.isEmpty || Decimal(string: amount) == nil)
+                .disabled(
+                    model.busy
+                        || receiver.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || Decimal(string: amount) == nil
+                )
             }
             .navigationTitle("Send")
             .sheet(item: $model.lastSend) { receipt in

@@ -75,6 +75,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Switch
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material.icons.outlined.WifiOff
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.automirrored.outlined.CallMade
 import androidx.compose.material.icons.automirrored.outlined.CallReceived
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -136,7 +143,8 @@ fun WalletApp(model: WalletModel, autoAccept: Boolean) {
         while (true) {
             model.refresh()
             if (autoAccept) {
-                model.inbox.firstOrNull()?.let { model.accept(it) }
+                model.inbox.firstOrNull { it.contractId !in model.processing }
+                    ?.let { model.accept(it) }
             }
             delay(3_000)
         }
@@ -145,31 +153,43 @@ fun WalletApp(model: WalletModel, autoAccept: Boolean) {
     when (val phase = model.phase) {
         WalletModel.Phase.Fresh, WalletModel.Phase.Onboarding -> CenteredMessage(
             title = "Creating your wallet…",
-            body = "A signing key is being generated in this device's keystore and registered as your Canton party.",
+            body = "A signing key is being generated in this device's keystore and registered " +
+                "as your Canton party. The key never leaves the device.",
             spinner = true,
         )
         is WalletModel.Phase.Failed -> CenteredMessage(
             title = "Can't reach ${WalletEnvironment.name}",
             body = phase.message,
             spinner = false,
+            error = true,
         )
         WalletModel.Phase.Ready -> WalletTabs(model)
     }
 }
 
 @Composable
-private fun CenteredMessage(title: String, body: String, spinner: Boolean) {
+private fun CenteredMessage(title: String, body: String, spinner: Boolean, error: Boolean = false) {
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (spinner) CircularProgressIndicator()
+        if (error) {
+            Icon(
+                Icons.Outlined.WifiOff,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(40.dp),
+            )
+        }
         Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
         Text(
             body,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 6,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 8.dp),
         )
     }
@@ -230,7 +250,7 @@ private fun PortfolioScreen(model: WalletModel) {
             ) {
                 Text(model.signerLabel, style = MaterialTheme.typography.titleLarge)
                 SectionHeader("What this means")
-                if (model.signerLabel.contains("keystore") && !model.signerLabel.contains("emulator")) {
+                if (model.hardwareSigner) {
                     Text(
                         "Your signing key was generated inside this device's secure hardware. " +
                             "It cannot be exported, synced, backed up, or read — by this app, by Google, " +
@@ -254,6 +274,14 @@ private fun PortfolioScreen(model: WalletModel) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                SectionHeader("Network")
+                ReceiptRow("Environment", WalletEnvironment.name)
+                ReceiptRow("Participant", "${WalletEnvironment.hostBridge}:2901", mono = true)
+                Text(
+                    "DevNet and bring-your-own-validator arrive with real authentication flows.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Button(
                     onClick = { showSigner = false },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -261,19 +289,28 @@ private fun PortfolioScreen(model: WalletModel) {
             }
         }
     }
+    var refreshing by remember { mutableStateOf(false) }
+    val refreshScope = rememberCoroutineScope()
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = {
+            refreshScope.launch {
+                refreshing = true
+                model.refresh()
+                refreshing = false
+            }
+        },
+    ) {
     LazyColumn {
         item {
             ElevatedCard(Modifier.fillMaxWidth().padding(16.dp)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "${model.totalAmulet.stripTrailingZeros().toPlainString()} CC",
+                        "${model.totalAmulet.cc()} CC",
                         style = MaterialTheme.typography.displaySmall,
                     )
                     OutlinedButton(onClick = { showSigner = true }) {
                         Text(model.signerLabel, style = MaterialTheme.typography.labelMedium)
-                    }
-                    model.lastError?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -283,6 +320,13 @@ private fun PortfolioScreen(model: WalletModel) {
                 "Holdings",
                 Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
             )
+        }
+        if (model.holdings.isEmpty()) {
+            item {
+                ListItem(headlineContent = {
+                    Text("No holdings yet — receive CC to get started.")
+                })
+            }
         }
         val groups = model.holdings
             .groupBy { it.instrumentId.id to (it.lock != null) }
@@ -299,7 +343,7 @@ private fun PortfolioScreen(model: WalletModel) {
         items(groups, key = { "${it.label}|${it.locked}" }) { group ->
             ListItem(
                 headlineContent = {
-                    Text("${group.amount.stripTrailingZeros().toPlainString()} ${group.label}")
+                    Text("${group.amount.cc()} ${group.label}")
                 },
                 supportingContent = {
                     Text(
@@ -312,6 +356,17 @@ private fun PortfolioScreen(model: WalletModel) {
             )
             HorizontalDivider()
         }
+        model.lastError?.let { error ->
+            item {
+                Text(
+                    error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
+    }
     }
 }
 
@@ -348,9 +403,21 @@ private data class HoldingGroup(
     val contractId: String?,
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun InboxScreen(model: WalletModel) {
-    val scope = rememberCoroutineScope()
+    var refreshing by remember { mutableStateOf(false) }
+    val refreshScope = rememberCoroutineScope()
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = {
+            refreshScope.launch {
+                refreshing = true
+                model.refresh()
+                refreshing = false
+            }
+        },
+    ) {
     LazyColumn {
         if (model.inbox.isEmpty()) {
             item { ListItem(headlineContent = { Text("No pending offers.") }) }
@@ -358,7 +425,7 @@ private fun InboxScreen(model: WalletModel) {
         items(model.inbox, key = { it.contractId }) { offer ->
             ListItem(
                 headlineContent = {
-                    Text("${offer.transfer.amount.toPlainString()} ${offer.transfer.instrumentId.id}")
+                    Text("${offer.transfer.amount.cc()} ${offer.transfer.instrumentId.id}")
                 },
                 supportingContent = {
                     Column {
@@ -384,6 +451,9 @@ private fun InboxScreen(model: WalletModel) {
                             OutlinedButton(
                                 onClick = { model.reject(offer) },
                                 enabled = offer.contractId !in model.processing,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error,
+                                ),
                             ) { Text("Reject") }
                         }
                     }
@@ -392,12 +462,12 @@ private fun InboxScreen(model: WalletModel) {
             HorizontalDivider()
         }
     }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SendScreen(model: WalletModel) {
-    val scope = rememberCoroutineScope()
     model.lastSend?.let { receipt ->
         ModalBottomSheet(onDismissRequest = { model.lastSend = null }) {
             Column(
@@ -419,7 +489,7 @@ private fun SendScreen(model: WalletModel) {
                     textAlign = TextAlign.Center,
                 )
                 HorizontalDivider()
-                ReceiptRow("Amount", "${receipt.amount.stripTrailingZeros().toPlainString()} CC")
+                ReceiptRow("Amount", "${receipt.amount.cc()} CC")
                 ReceiptRow("To", receipt.receiver.take(28) + "…", mono = true)
                 if (receipt.memo.isNotBlank()) ReceiptRow("Memo", receipt.memo)
                 ReceiptRow(
@@ -449,6 +519,10 @@ private fun SendScreen(model: WalletModel) {
             value = receiver,
             onValueChange = { receiver = it },
             label = { Text("Recipient party id") },
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
             trailingIcon = {
                 IconButton(onClick = {
                     val options = GmsBarcodeScannerOptions.Builder()
@@ -456,7 +530,14 @@ private fun SendScreen(model: WalletModel) {
                         .build()
                     GmsBarcodeScanning.getClient(context, options).startScan()
                         .addOnSuccessListener { code -> code.rawValue?.let { receiver = it.trim() } }
-                        .addOnFailureListener { Log.i("WALLET", "scan failed: $it") }
+                        .addOnFailureListener {
+                            Log.i("WALLET", "scan failed: $it")
+                            android.widget.Toast.makeText(
+                                context,
+                                "Scanner unavailable — paste the party id instead.",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        }
                 }) { Icon(Icons.Outlined.QrCodeScanner, contentDescription = "Scan QR code") }
             },
             modifier = Modifier.fillMaxWidth(),
@@ -465,9 +546,10 @@ private fun SendScreen(model: WalletModel) {
             value = amount,
             onValueChange = { amount = it },
             label = { Text("Amount (CC)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             supportingText = {
                 Row {
-                    Text("Available: ${model.totalAmulet.stripTrailingZeros().toPlainString()} CC")
+                    Text("Available: ${model.totalAmulet.cc()} CC")
                     Spacer(Modifier.size(12.dp))
                     Text(
                         "MAX",
@@ -521,7 +603,9 @@ private fun ReceiveScreen(model: WalletModel) {
                     )
                 }
                 Text("Your party id", style = MaterialTheme.typography.titleSmall)
-                Text(party, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                SelectionContainer {
+                    Text(party, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
                 val clipboard = LocalClipboardManager.current
                 OutlinedButton(onClick = { clipboard.setText(AnnotatedString(party)) }) {
                     Text("Copy party id")
@@ -542,9 +626,11 @@ private fun ReceiveScreen(model: WalletModel) {
                     Text(
                         when {
                             model.preapproval != null ->
-                                "Transfers to you settle in one step — no acceptance needed."
+                                "Transfers to you settle in one step — no acceptance needed. " +
+                                    "Turning this off archives the preapproval, signed on-device."
                             waiting -> "Waiting for your validator to approve…"
-                            else -> "Asks your validator to preapprove incoming transfers. Signed on-device."
+                            else -> "Asks your validator to preapprove incoming transfers, so they " +
+                                "settle without an inbox step. Signed on-device."
                         }
                     )
                     model.preapproval?.expiresAt?.let {
@@ -635,6 +721,18 @@ private fun HistoryScreen(model: WalletModel) {
             }
         }
     }
+    var refreshing by remember { mutableStateOf(false) }
+    val refreshScope = rememberCoroutineScope()
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = {
+            refreshScope.launch {
+                refreshing = true
+                model.refresh()
+                refreshing = false
+            }
+        },
+    ) {
     LazyColumn {
         if (model.history.isEmpty()) {
             item { ListItem(headlineContent = { Text("No activity yet.") }) }
@@ -666,7 +764,7 @@ private fun HistoryScreen(model: WalletModel) {
                     Column(horizontalAlignment = Alignment.End) {
                         if (credited.signum() > 0) {
                             Text(
-                                "+${credited.stripTrailingZeros().toPlainString()} CC",
+                                "+${credited.cc()} CC",
                                 color = Color(0xFF2E7D32),
                             )
                         }
@@ -683,21 +781,33 @@ private fun HistoryScreen(model: WalletModel) {
             HorizontalDivider()
         }
     }
+    }
 }
 
 private fun qrBitmap(text: String): Bitmap? = try {
     val size = 512
-    val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, size, size)
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
-    for (x in 0 until size) {
-        for (y in 0 until size) {
-            bitmap.setPixel(
-                x, y,
-                if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE,
-            )
+    // Quartile error correction: party ids are long, and phone-camera scans
+    // of another device's screen need headroom for glare and angle.
+    val matrix = QRCodeWriter().encode(
+        text, BarcodeFormat.QR_CODE, size, size,
+        mapOf(
+            com.google.zxing.EncodeHintType.ERROR_CORRECTION to
+                com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.Q
+        ),
+    )
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            pixels[y * size + x] =
+                if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
         }
     }
-    bitmap
+    Bitmap.createBitmap(pixels, size, size, Bitmap.Config.RGB_565)
 } catch (_: Exception) {
     null
 }
+
+/** One shared CC amount rendering: at least one, at most four fraction
+ *  digits — matching the iOS formatter so both apps read the same. */
+private val ccFormat = java.text.DecimalFormat("0.0###")
+private fun java.math.BigDecimal.cc(): String = ccFormat.format(this)

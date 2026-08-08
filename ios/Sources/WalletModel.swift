@@ -68,7 +68,8 @@ final class WalletModel {
             // Restore an existing wallet identity before minting a new one:
             // the party is already allocated on the ledger; only the signer
             // needs reviving from its keychain-held handle.
-            if let record = try? await store.list().first, let handle = record.keyHandle {
+            let existing = try? await store.list().first
+            if let record = existing, let handle = record.keyHandle {
                 let (driver, _, label) = try SignerFactory.make(restoring: handle)
                 self.driver = driver
                 self.signerLabel = label
@@ -81,6 +82,15 @@ final class WalletModel {
                 phase = .ready
                 print("WALLET: restored \(record.partyId) signer=\(label)")
                 await refresh()
+                return
+            }
+            // A party without its signer handle can never sign again; fail
+            // loudly rather than mint a fresh key under the old identity.
+            if let record = existing {
+                phase = .failed(
+                    "The stored wallet for \(record.partyId) has no signer handle, "
+                        + "so it can't sign. Delete and reinstall the app to start fresh."
+                )
                 return
             }
 
@@ -161,6 +171,7 @@ final class WalletModel {
     /// Sends Amulet to another party (two-step unless they're preapproved).
     func send(to receiver: String, amount: Decimal, memo: String = "") async {
         guard let client, let driver, let allocated, let synchronizerId else { return }
+        let memo = memo.trimmingCharacters(in: .whitespacesAndNewlines)
         busy = true
         defer { busy = false }
         do {
