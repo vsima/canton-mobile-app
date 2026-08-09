@@ -84,10 +84,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.automirrored.outlined.CallMade
 import androidx.compose.material.icons.automirrored.outlined.CallReceived
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.foundation.text.selection.SelectionContainer
 import android.text.format.DateUtils
 import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.vsima.canton.wallet.TokenStandardClient
+import io.github.vsima.canton.wallet.TransferDirection
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import androidx.compose.material3.AlertDialog
@@ -663,6 +666,24 @@ private fun ReceiveScreen(model: WalletModel) {
     }
 }
 
+/** One display label per history row and detail — from the SDK's transfer
+ *  summary when present, from the raw created/archived deltas otherwise.
+ *  UNKNOWN with a positive net is how taps and preapproved direct receives
+ *  surface (no transfer view), so it reads "Received" — but the row never
+ *  invents a counterparty for it. */
+private fun changeTitle(change: TokenStandardClient.HoldingsChange): String {
+    val summary = change.summary
+        ?: return if (change.created.isEmpty()) "Sent / spent" else "Received"
+    return when (summary.direction) {
+        TransferDirection.SENT -> "Sent"
+        TransferDirection.RECEIVED -> "Received"
+        TransferDirection.SELF_TRANSFER -> "Sent to self"
+        TransferDirection.INTERNAL -> "Internal"
+        TransferDirection.UNKNOWN ->
+            if (summary.amount.signum() > 0) "Received" else "Activity"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryScreen(model: WalletModel) {
@@ -675,10 +696,7 @@ private fun HistoryScreen(model: WalletModel) {
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    if (change.created.isEmpty()) "Sent / spent" else "Received",
-                    style = MaterialTheme.typography.titleLarge,
-                )
+                Text(changeTitle(change), style = MaterialTheme.typography.titleLarge)
                 SectionHeader("When")
                 Text(
                     java.time.format.DateTimeFormatter
@@ -686,6 +704,21 @@ private fun HistoryScreen(model: WalletModel) {
                         .withZone(java.time.ZoneId.systemDefault())
                         .format(change.recordTime),
                 )
+                change.summary?.let { summary ->
+                    SectionHeader("Transfer")
+                    ReceiptRow("Direction", changeTitle(change))
+                    summary.counterparty?.let { party ->
+                        Text("Counterparty", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        SelectionContainer {
+                            Text(
+                                party,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    summary.memo?.takeIf { it.isNotBlank() }?.let { ReceiptRow("Memo", it) }
+                }
                 if (change.created.isNotEmpty()) {
                     SectionHeader("Credited")
                     change.created.forEach { holding ->
@@ -734,46 +767,87 @@ private fun HistoryScreen(model: WalletModel) {
         },
     ) {
     LazyColumn {
-        if (model.history.isEmpty()) {
+        // The offer leg of a two-step transfer nets to zero (holdings only
+        // lock); the settlement leg carries the value. Hide the zero-net
+        // noise from the list — the detail sheet still has everything.
+        val visible = model.history.filter { it.summary?.amount?.signum() != 0 }
+        if (visible.isEmpty()) {
             item { ListItem(headlineContent = { Text("No activity yet.") }) }
         }
-        items(model.history, key = { it.updateId }) { change ->
-            val credited = change.created.fold(java.math.BigDecimal.ZERO) { acc, holding ->
-                acc + holding.amount
+        items(visible, key = { it.updateId }) { change ->
+            val summary = change.summary
+            val received =
+                if (summary != null) {
+                    summary.amount.signum() > 0 &&
+                        (summary.direction == TransferDirection.RECEIVED ||
+                            summary.direction == TransferDirection.UNKNOWN)
+                } else {
+                    change.created.isNotEmpty()
+                }
+            val icon = when {
+                summary?.direction == TransferDirection.INTERNAL -> Icons.Outlined.Autorenew
+                summary?.direction == TransferDirection.UNKNOWN && !received ->
+                    Icons.Outlined.SwapHoriz
+                received -> Icons.AutoMirrored.Outlined.CallReceived
+                else -> Icons.AutoMirrored.Outlined.CallMade
             }
-            val received = change.created.isNotEmpty()
             ListItem(
                 modifier = Modifier.clickable { selected = change },
                 leadingContent = {
                     Icon(
-                        if (received) Icons.AutoMirrored.Outlined.CallReceived
-                        else Icons.AutoMirrored.Outlined.CallMade,
+                        icon,
                         contentDescription = null,
                         tint = if (received) Color(0xFF2E7D32)
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 },
-                headlineContent = { Text(if (received) "Received" else "Sent / spent") },
+                headlineContent = { Text(changeTitle(change)) },
                 supportingContent = {
-                    Text(
-                        DateUtils.getRelativeTimeSpanString(change.recordTime.toEpochMilli()).toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+                    Column {
+                        if (summary != null) {
+                            summary.counterparty?.let { party ->
+                                Text(
+                                    (if (summary.direction == TransferDirection.SENT) "to " else "from ") +
+                                        party.take(30) + "…",
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            summary.memo?.takeIf { it.isNotBlank() }?.let {
+                                Text("“$it”", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Text(
+                            DateUtils.getRelativeTimeSpanString(change.recordTime.toEpochMilli()).toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 },
                 trailingContent = {
-                    Column(horizontalAlignment = Alignment.End) {
-                        if (credited.signum() > 0) {
-                            Text(
-                                "+${credited.cc()} CC",
-                                color = Color(0xFF2E7D32),
-                            )
+                    if (summary != null) {
+                        Text(
+                            (if (summary.amount.signum() > 0) "+" else "") +
+                                "${summary.amount.cc()} CC",
+                            color = if (received) Color(0xFF2E7D32) else Color.Unspecified,
+                        )
+                    } else {
+                        val credited = change.created.fold(java.math.BigDecimal.ZERO) { acc, holding ->
+                            acc + holding.amount
                         }
-                        if (change.archivedContractIds.isNotEmpty()) {
-                            Text(
-                                "${change.archivedContractIds.size} input" +
-                                    (if (change.archivedContractIds.size == 1) "" else "s") + " spent",
-                                style = MaterialTheme.typography.labelSmall,
-                            )
+                        Column(horizontalAlignment = Alignment.End) {
+                            if (credited.signum() > 0) {
+                                Text(
+                                    "+${credited.cc()} CC",
+                                    color = Color(0xFF2E7D32),
+                                )
+                            }
+                            if (change.archivedContractIds.isNotEmpty()) {
+                                Text(
+                                    "${change.archivedContractIds.size} input" +
+                                        (if (change.archivedContractIds.size == 1) "" else "s") + " spent",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
                         }
                     }
                 },
