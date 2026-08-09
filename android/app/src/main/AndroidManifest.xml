@@ -4,8 +4,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Dev builds talk plaintext to LocalNet via the emulator host bridge. -->
+    <!-- The wallet store is encrypted under a device-bound Keystore key, so a
+         restored backup could never be decrypted anyway — and wallet state
+         does not belong in a cloud backup to begin with. -->
     <application
         android:label="Canton Wallet"
+        android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <!-- Prefetch the Play services scanner module used by the Send screen. -->

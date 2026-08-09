@@ -107,7 +107,10 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val model by lazy {
-        WalletModel(getSharedPreferences("wallet", MODE_PRIVATE))
+        WalletModel(
+            store = io.github.vsima.canton.wallet.android.AndroidKeystoreWalletStore(this),
+            legacyPrefs = getSharedPreferences("wallet", MODE_PRIVATE),
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

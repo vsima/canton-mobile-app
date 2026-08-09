@@ -14,8 +14,10 @@ android {
 
     defaultConfig {
         applicationId = "io.github.vsima.canton.app"
-        // The keystore driver (canton-wallet-android) needs 23.
-        minSdk = 23
+        // java.time — used here and by the SDK's WalletRecord — is native
+        // from API 26. Below that it needs core library desugaring, and a
+        // wallet is not the place to carry a backport for Android 6/7.
+        minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"

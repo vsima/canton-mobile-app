@@ -126,7 +126,11 @@ object WalletEnvironment {
 
 /** Mirror of the iOS WalletModel, on Compose state. `WALLET:` logcat lines
  *  drive the same headless verification loop. */
-class WalletModel(private val prefs: android.content.SharedPreferences) {
+class WalletModel(
+    private val store: io.github.vsima.canton.wallet.WalletStore,
+    /** Only read to migrate installs that predate [store]; see [migrateLegacyPrefs]. */
+    private val legacyPrefs: android.content.SharedPreferences? = null,
+) {
     /** Operations outlive the composables that trigger them: a tapped
      *  Accept must not die because its row left the screen. */
     private val scope = kotlinx.coroutines.CoroutineScope(
@@ -199,24 +203,22 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             val authed = WalletEnvironment.authed(plain, WalletEnvironment.userId)
             authedChannel = authed
 
-            val restoredKey = AndroidKeystoreSigningDriver.load("wallet")
-            val savedParty = prefs.getString("partyId", null)
-            val savedFingerprint = prefs.getString("fingerprint", null)
-            val savedSynchronizer = prefs.getString("synchronizerId", null)
+            val restoredKey = AndroidKeystoreSigningDriver.load(KEY_ALIAS)
+            val saved = (store.list().firstOrNull() ?: migrateLegacyPrefs())
 
             // A restored party is only usable with the key it was allocated
             // under. If the keystore entry is gone while the party record
             // survives, fail loudly instead of pairing the party with a
             // fresh key that can never sign for it.
-            if (savedParty != null && restoredKey == null) {
+            if (saved != null && restoredKey == null) {
                 phase = Phase.Failed(
-                    "The signing key for $savedParty is no longer in the keystore, " +
+                    "The signing key for ${saved.partyId} is no longer in the keystore, " +
                         "so this party can't sign. Clear the app's data to start a fresh wallet."
                 )
                 return
             }
 
-            val keystore = restoredKey ?: AndroidKeystoreSigningDriver.generate("wallet")
+            val keystore = restoredKey ?: AndroidKeystoreSigningDriver.generate(KEY_ALIAS)
             driver = keystore
             signerLabel = when (keystore.securityLevel) {
                 AndroidKeystoreSigningDriver.SecurityLevel.STRONGBOX -> "StrongBox secure element"
@@ -232,12 +234,12 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             // The key lives in the keystore; the party record must persist
             // beside it or a relaunch re-allocates the same party and the
             // participant rightly refuses ("already exists").
-            if (savedParty != null && savedFingerprint != null && savedSynchronizer != null) {
-                partyId = savedParty
-                allocated = AllocatedExternalParty(savedParty, savedFingerprint)
-                synchronizerId = savedSynchronizer
+            if (saved != null) {
+                partyId = saved.partyId
+                allocated = AllocatedExternalParty(saved.partyId, saved.publicKeyFingerprint)
+                synchronizerId = saved.synchronizerId
                 phase = Phase.Ready
-                Log.i("WALLET", "restored $savedParty signer=$signerLabel")
+                Log.i("WALLET", "restored ${saved.partyId} signer=$signerLabel")
                 refresh()
                 return
             }
@@ -249,11 +251,17 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             val party = parties.allocate(keystore, synchronizer, "droidwallet", WalletEnvironment.userId)
             partyId = party.partyId
             allocated = party
-            prefs.edit()
-                .putString("partyId", party.partyId)
-                .putString("fingerprint", party.publicKeyFingerprint)
-                .putString("synchronizerId", synchronizer)
-                .apply()
+            store.save(
+                io.github.vsima.canton.wallet.WalletRecord(
+                    partyId = party.partyId,
+                    publicKeyFingerprint = party.publicKeyFingerprint,
+                    synchronizerId = synchronizer,
+                    // The Android driver's handle is its keystore alias; the
+                    // key itself never leaves the TEE.
+                    keyHandle = KEY_ALIAS.toByteArray(),
+                    createdAt = java.time.Instant.now(),
+                )
+            )
             phase = Phase.Ready
             Log.i("WALLET", "onboarded ${party.partyId} signer=$signerLabel")
             refresh()
@@ -261,6 +269,32 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
             phase = Phase.Failed(error.toString())
             Log.i("WALLET", "onboarding failed: $error")
         }
+    }
+
+    /**
+     * Moves a party record written by builds that predated the encrypted
+     * store out of plain SharedPreferences, so an existing wallet survives
+     * the upgrade instead of re-onboarding against a party the participant
+     * already knows. Delete once no install can still be carrying one.
+     */
+    private suspend fun migrateLegacyPrefs(): io.github.vsima.canton.wallet.WalletRecord? {
+        val prefs = legacyPrefs ?: return null
+        val party = prefs.getString("partyId", null) ?: return null
+        val fingerprint = prefs.getString("fingerprint", null) ?: return null
+        val synchronizer = prefs.getString("synchronizerId", null) ?: return null
+
+        val record = io.github.vsima.canton.wallet.WalletRecord(
+            partyId = party,
+            publicKeyFingerprint = fingerprint,
+            synchronizerId = synchronizer,
+            keyHandle = KEY_ALIAS.toByteArray(),
+            createdAt = java.time.Instant.now(),
+        )
+        store.save(record)
+        // Only drop the plaintext copy once the encrypted one is durable.
+        prefs.edit().clear().apply()
+        Log.i("WALLET", "migrated $party into the encrypted store")
+        return record
     }
 
     suspend fun refresh() {
@@ -631,6 +665,9 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         )
 
     companion object {
+        /** Android Keystore alias holding this wallet's signing key. */
+        const val KEY_ALIAS = "wallet"
+
         /** Convention key for human-readable transfer memos. */
         const val MEMO_KEY = "splice.lfdecentralizedtrust.org/reason"
 
