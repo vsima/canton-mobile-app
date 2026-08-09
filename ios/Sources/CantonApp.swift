@@ -159,6 +159,9 @@ struct WalletTabsView: View {
 struct PortfolioView: View {
     @Environment(WalletModel.self) private var model
     @State private var showSigner = false
+    // Progressive disclosure of the UTXO model: the rolled-up balance row
+    // opens a sheet listing the discrete holding contracts backing it.
+    @State private var selectedGroup: HoldingGroup?
 
     var body: some View {
         NavigationStack {
@@ -184,21 +187,26 @@ struct PortfolioView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(holdingGroups) { group in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text("\(group.amount as NSDecimalNumber, formatter: Self.amountFormat) \(group.label)")
-                                    .font(.body.monospacedDigit())
-                                Text(group.contractId.map { String($0.prefix(24)) + "…" }
-                                    ?? "\(group.count) holding contracts")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if group.locked {
-                                Image(systemName: "lock.fill")
-                                    .foregroundStyle(.secondary)
+                        Button {
+                            selectedGroup = group
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text("\(group.amount as NSDecimalNumber, formatter: Self.amountFormat) \(group.label)")
+                                        .font(.body.monospacedDigit())
+                                    Text(group.contractId.map { String($0.prefix(24)) + "…" }
+                                        ?? "\(group.count) holding contracts")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if group.locked {
+                                    Image(systemName: "lock.fill")
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 if let error = model.lastError {
@@ -212,18 +220,22 @@ struct PortfolioView: View {
             .sheet(isPresented: $showSigner) {
                 SignerDetailView()
             }
+            .sheet(item: $selectedGroup) { group in
+                HoldingGroupDetailView(group: group)
+            }
         }
     }
 
     /// Holdings are discrete UTXO-style contracts on the ledger; the
     /// portfolio rolls them up to one row per instrument (locked apart).
-    private struct HoldingGroup: Identifiable {
+    fileprivate struct HoldingGroup: Identifiable {
         let id: String
         let label: String
         let amount: Decimal
         let count: Int
         let contractId: String?
         let locked: Bool
+        let holdings: [Holding]
     }
 
     private var holdingGroups: [HoldingGroup] {
@@ -235,7 +247,8 @@ struct PortfolioView: View {
                     amount: group.reduce(Decimal.zero) { $0 + (Decimal(string: $1.amount) ?? 0) },
                     count: group.count,
                     contractId: group.count == 1 ? group[0].contractId : nil,
-                    locked: group[0].lock != nil
+                    locked: group[0].lock != nil,
+                    holdings: group
                 )
             }
             .sorted { ($0.locked ? 1 : 0, $0.label) < ($1.locked ? 1 : 0, $1.label) }
@@ -247,6 +260,66 @@ struct PortfolioView: View {
         format.maximumFractionDigits = 4
         return format
     }()
+}
+
+/// The contracts backing a rolled-up holdings row: the balance is not a
+/// number in an account but discrete holding contracts (Amulets), consumed
+/// whole and merged into change on sends.
+private struct HoldingGroupDetailView: View {
+    let group: PortfolioView.HoldingGroup
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Backed by \(group.count) contract\(group.count == 1 ? "" : "s")") {
+                    ForEach(group.holdings, id: \.contractId) { holding in
+                        HoldingContractRow(holding: holding, label: group.label)
+                    }
+                }
+            }
+            .navigationTitle(group.locked ? "\(group.label) (locked)" : group.label)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// One backing holding contract (Amulet): amount plus shortened contract id;
+/// tapping the row reveals the full id, selectable for copying.
+private struct HoldingContractRow: View {
+    let holding: Holding
+    let label: String
+    @State private var expanded = false
+
+    var body: some View {
+        Button {
+            withAnimation { expanded.toggle() }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\((Decimal(string: holding.amount) ?? 0) as NSDecimalNumber, formatter: PortfolioView.amountFormat) \(label)")
+                        .font(.body.monospacedDigit())
+                    Text(holding.contractId.prefix(24) + "…")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        if expanded {
+            Text(holding.contractId)
+                .font(.caption2.monospaced())
+                .textSelection(.enabled)
+        }
+    }
 }
 
 struct InboxView: View {
