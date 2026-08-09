@@ -10,14 +10,24 @@ struct HistoryView: View {
     @Environment(WalletModel.self) private var model
     @State private var selected: TokenStandardClient.HoldingsChange?
 
+    /// The offer leg of a two-step transfer nets to zero (holdings only
+    /// lock); the settlement leg carries the value. Hide the zero-net noise
+    /// from the list — the detail sheet still has everything.
+    private var visible: [TokenStandardClient.HoldingsChange] {
+        model.history.filter { change in
+            guard let summary = change.summary else { return true }
+            return (Decimal(string: summary.amount) ?? 0) != 0
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if model.history.isEmpty {
+                if visible.isEmpty {
                     Text("No activity yet.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(model.history, id: \.updateId) { change in
+                ForEach(visible, id: \.updateId) { change in
                     Button {
                         selected = change
                     } label: {
@@ -35,6 +45,24 @@ struct HistoryView: View {
     }
 }
 
+/// One display label per history row and detail — from the SDK's transfer
+/// summary when present, from the raw created/archived deltas otherwise.
+/// `.unknown` with a positive net is how taps and preapproved direct
+/// receives surface (no transfer view), so it reads "Received" — but the
+/// row never invents a counterparty for it.
+private func changeTitle(_ change: TokenStandardClient.HoldingsChange) -> String {
+    guard let summary = change.summary else {
+        return change.created.isEmpty ? "Sent / spent" : "Received"
+    }
+    switch summary.direction {
+    case .sent: return "Sent"
+    case .received: return "Received"
+    case .selfTransfer: return "Sent to self"
+    case .internal: return "Internal"
+    case .unknown: return (Decimal(string: summary.amount) ?? 0) > 0 ? "Received" : "Activity"
+    }
+}
+
 struct HistoryRow: View {
     let change: TokenStandardClient.HoldingsChange
 
@@ -42,27 +70,61 @@ struct HistoryRow: View {
         change.created.reduce(.zero) { $0 + (Decimal(string: $1.amount) ?? .zero) }
     }
 
+    /// The summary's signed fee-inclusive net, when a summary exists.
+    private var net: Decimal? {
+        change.summary.flatMap { Decimal(string: $0.amount) }
+    }
+
+    private var received: Bool {
+        guard let summary = change.summary else { return !change.created.isEmpty }
+        guard let net, net > 0 else { return false }
+        return summary.direction == .received || summary.direction == .unknown
+    }
+
+    private var iconName: String {
+        switch change.summary?.direction {
+        case .internal: "arrow.triangle.2.circlepath"
+        case .unknown where !received: "arrow.left.arrow.right"
+        default: received ? "arrow.down.left" : "arrow.up.right"
+        }
+    }
+
     var body: some View {
         HStack {
-            Image(systemName: change.created.isEmpty ? "arrow.up.right" : "arrow.down.left")
-                .foregroundStyle(change.created.isEmpty ? Color.secondary : Color.green)
+            Image(systemName: iconName)
+                .foregroundStyle(received ? Color.green : Color.secondary)
             VStack(alignment: .leading) {
-                Text(change.created.isEmpty ? "Sent / spent" : "Received")
+                Text(changeTitle(change))
+                if let summary = change.summary, let counterparty = summary.counterparty {
+                    Text("\(summary.direction == .sent ? "to" : "from") \(counterparty.prefix(30))…")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                if let memo = change.summary?.memo, !memo.isEmpty {
+                    Text("“\(memo)”")
+                        .font(.caption)
+                }
                 Text(change.recordTime, style: .relative)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             VStack(alignment: .trailing) {
-                if credited > 0 {
-                    Text("+\(credited as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
-                        .foregroundStyle(.green)
+                if let net {
+                    Text("\(net > 0 ? "+" : "")\(net as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
+                        .foregroundStyle(received ? Color.green : Color.primary)
                         .font(.body.monospacedDigit())
-                }
-                if !change.archivedContractIds.isEmpty {
-                    Text("\(change.archivedContractIds.count) input\(change.archivedContractIds.count == 1 ? "" : "s") spent")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                } else {
+                    if credited > 0 {
+                        Text("+\(credited as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
+                            .foregroundStyle(.green)
+                            .font(.body.monospacedDigit())
+                    }
+                    if !change.archivedContractIds.isEmpty {
+                        Text("\(change.archivedContractIds.count) input\(change.archivedContractIds.count == 1 ? "" : "s") spent")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -83,6 +145,22 @@ struct ChangeDetailView: View {
             Form {
                 Section("When") {
                     Text(change.recordTime.formatted(date: .abbreviated, time: .standard))
+                }
+                if let summary = change.summary {
+                    Section("Transfer") {
+                        LabeledContent("Direction", value: changeTitle(change))
+                        if let counterparty = summary.counterparty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Counterparty")
+                                Text(counterparty)
+                                    .font(.caption2.monospaced())
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        if let memo = summary.memo, !memo.isEmpty {
+                            LabeledContent("Memo", value: memo)
+                        }
+                    }
                 }
                 if !change.created.isEmpty {
                     Section("Credited") {
@@ -108,7 +186,7 @@ struct ChangeDetailView: View {
                         .textSelection(.enabled)
                 }
             }
-            .navigationTitle(change.created.isEmpty ? "Sent / spent" : "Received")
+            .navigationTitle(changeTitle(change))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
