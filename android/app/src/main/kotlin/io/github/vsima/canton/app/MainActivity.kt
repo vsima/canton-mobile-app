@@ -71,6 +71,8 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.ElevatedCard
@@ -89,6 +91,7 @@ import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.foundation.text.selection.SelectionContainer
 import android.text.format.DateUtils
 import androidx.compose.ui.graphics.vector.ImageVector
+import io.github.vsima.canton.wallet.Holding
 import io.github.vsima.canton.wallet.TokenStandardClient
 import io.github.vsima.canton.wallet.TransferDirection
 import com.google.zxing.BarcodeFormat
@@ -292,6 +295,37 @@ private fun PortfolioScreen(model: WalletModel) {
             }
         }
     }
+    // Progressive disclosure of the UTXO model: the rolled-up balance row
+    // opens a sheet listing the discrete holding contracts backing it.
+    var selectedGroup by remember { mutableStateOf<HoldingGroup?>(null) }
+    selectedGroup?.let { group ->
+        ModalBottomSheet(onDismissRequest = { selectedGroup = null }) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    if (group.locked) "${group.label} (locked)" else group.label,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    "Backed by ${group.count} contract" + if (group.count == 1) "" else "s",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                group.holdings.forEachIndexed { index, holding ->
+                    if (index > 0) HorizontalDivider()
+                    HoldingContractRow(holding, group.label)
+                }
+                Button(
+                    onClick = { selectedGroup = null },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Done") }
+            }
+        }
+    }
     var refreshing by remember { mutableStateOf(false) }
     val refreshScope = rememberCoroutineScope()
     PullToRefreshBox(
@@ -340,11 +374,13 @@ private fun PortfolioScreen(model: WalletModel) {
                     amount = group.fold(java.math.BigDecimal.ZERO) { acc, h -> acc + h.amount },
                     count = group.size,
                     contractId = group.singleOrNull()?.contractId,
+                    holdings = group,
                 )
             }
             .sortedWith(compareBy({ it.locked }, { it.label }))
         items(groups, key = { "${it.label}|${it.locked}" }) { group ->
             ListItem(
+                modifier = Modifier.clickable { selectedGroup = group },
                 headlineContent = {
                     Text("${group.amount.cc()} ${group.label}")
                 },
@@ -404,7 +440,48 @@ private data class HoldingGroup(
     val amount: java.math.BigDecimal,
     val count: Int,
     val contractId: String?,
+    val holdings: List<Holding>,
 )
+
+/** One backing holding contract (Amulet): amount plus shortened contract id;
+ *  tapping the row reveals the full id, selectable for copying. */
+@Composable
+private fun HoldingContractRow(holding: Holding, label: String) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("${holding.amount.cc()} $label")
+                Text(
+                    holding.contractId.take(24) + "…",
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription =
+                    if (expanded) "Hide full contract id" else "Show full contract id",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            SelectionContainer {
+                Text(
+                    holding.contractId,
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
