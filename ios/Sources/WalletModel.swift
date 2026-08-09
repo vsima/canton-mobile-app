@@ -210,6 +210,69 @@ final class WalletModel {
         }
     }
 
+    /// The scan reads feeding ``estimatedFee(amountCc:)``: the USD fee
+    /// schedule plus the open rounds carrying the CC price.
+    private struct FeePreviewInputs {
+        let schedule: TransferFeeSchedule
+        let rounds: [OpenMiningRound]
+    }
+
+    private var feePreview: FeePreviewInputs?
+    private var feePreviewAttemptedAt = Date.distantPast
+    private var feePreviewInFlight = false
+    /// At most one fee-preview scan fetch per window; rounds rotate every
+    /// ~2.5–10 minutes, so a few minutes of staleness is fine.
+    private static let feePreviewTTL: TimeInterval = 3 * 60
+
+    /// The estimated network fee in CC for sending `amountCc` — the SDK's
+    /// `TransferFeeEstimator` over the cached AmuletRules schedule,
+    /// converted at the latest usable open round's price. Nil when the
+    /// amount isn't positive or the cache is empty (scan unreachable / not
+    /// fetched yet) — the fee row is simply absent then; never an error
+    /// state. Pure cache read: ``ensureFeePreviewFresh()`` populates it.
+    ///
+    /// Known reality: CIP-0078 zeroed all Canton Coin transfer fees by
+    /// governance vote, and splice >= 0.5.16 (CIP-0107) hardcodes them to
+    /// zero — so on every current network this estimate is 0. The row is
+    /// the reference wiring for fee-charging registries/configs, and the
+    /// app renders the honest value, whatever the network's schedule says.
+    func estimatedFee(amountCc: Decimal) -> Decimal? {
+        guard amountCc > 0,
+              let inputs = feePreview,
+              let price = inputs.rounds.latestUsable()?.amuletPriceUsd, price > 0
+        else { return nil }
+        return TransferFeeEstimator.estimate(
+            schedule: inputs.schedule,
+            amuletPriceUsd: price,
+            amountCc: amountCc
+        ).feeCc
+    }
+
+    /// Lazily (re)fetches the fee-preview inputs from scan — at most one
+    /// attempt per ``feePreviewTTL``, so per-keystroke calls recompute from
+    /// cache and never hit the network. Fire-and-forget: it never blocks or
+    /// fails the send path; on any error the preview is just absent.
+    func ensureFeePreviewFresh() {
+        guard !feePreviewInFlight,
+              Date().timeIntervalSince(feePreviewAttemptedAt) >= Self.feePreviewTTL
+        else { return }
+        feePreviewAttemptedAt = Date()
+        feePreviewInFlight = true
+        Task {
+            defer { self.feePreviewInFlight = false }
+            do {
+                let scan = self.scan()
+                let config = try await scan.amuletRulesConfig()
+                let rounds = try await scan.openMiningRounds()
+                self.feePreview = FeePreviewInputs(schedule: config.transferFees, rounds: rounds)
+            } catch {
+                // Preview only: keep whatever cache exists; the row just
+                // stays absent when there is none.
+                print("WALLET: fee preview fetch failed: \(error)")
+            }
+        }
+    }
+
     private func exercise(_ instruction: TransferInstruction, choice: TransferInstructionChoice) async {
         guard let client, let driver, let allocated, let synchronizerId else { return }
         processing.insert(instruction.contractId)

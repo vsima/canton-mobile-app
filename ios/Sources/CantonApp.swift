@@ -436,6 +436,13 @@ struct SendView: View {
     @State private var memo = ""
     @State private var showScanner = false
 
+    /// Estimated network fee for the typed amount — nil (row hidden) until
+    /// the amount parses positive and the cached scan config is available.
+    private var estimatedFee: Decimal? {
+        guard let value = Decimal(string: amount) else { return nil }
+        return model.estimatedFee(amountCc: value)
+    }
+
     var body: some View {
         @Bindable var model = model
         NavigationStack {
@@ -461,11 +468,20 @@ struct SendView: View {
                 } header: {
                     Text("Amount (CC)")
                 } footer: {
-                    HStack {
-                        Text("Available: \(model.totalAmulet as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
-                        Spacer()
-                        Button("Max") { amount = "\(model.totalAmulet)" }
-                            .font(.caption)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Available: \(model.totalAmulet as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
+                            Spacer()
+                            Button("Max") { amount = "\(model.totalAmulet)" }
+                                .font(.caption)
+                        }
+                        // Appears once the amount parses positive and the
+                        // cached scan config is available; absent otherwise.
+                        // 0 CC on today's networks (CIP-0078) — see
+                        // WalletModel.estimatedFee for the honesty note.
+                        if let fee = estimatedFee {
+                            Text("Network fee: \(fee as NSDecimalNumber, formatter: PortfolioView.amountFormat) CC")
+                        }
                     }
                 }
                 Section("Memo (optional)") {
@@ -491,6 +507,10 @@ struct SendView: View {
                 )
             }
             .navigationTitle("Send")
+            // Prewarm/refresh the cached fee config as the amount changes;
+            // the estimate itself recomputes from cache — no network call
+            // per keystroke.
+            .task(id: amount) { model.ensureFeePreviewFresh() }
             .sheet(item: $model.lastSend) { receipt in
                 SendConfirmationView(receipt: receipt)
             }
