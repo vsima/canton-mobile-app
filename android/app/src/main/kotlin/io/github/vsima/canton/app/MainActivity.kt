@@ -353,16 +353,48 @@ private fun PortfolioScreen(model: WalletModel) {
             }
         }
         item {
-            SectionHeader(
-                "Holdings",
-                Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
-            )
+            // The faucet affordance lives beside the Holdings header once
+            // funded (low-key), and in the empty state below (prominent) —
+            // mirrored on iOS.
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionHeader("Holdings")
+                Spacer(Modifier.weight(1f))
+                if (model.holdings.isNotEmpty()) {
+                    if (model.funding) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        TextButton(onClick = { model.getTestFundsAsync() }) {
+                            Text("Get test funds", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
         }
         if (model.holdings.isEmpty()) {
             item {
-                ListItem(headlineContent = {
-                    Text("No holdings yet — receive CC to get started.")
-                })
+                ListItem(
+                    headlineContent = {
+                        Text("No holdings yet — receive CC to get started.")
+                    },
+                    supportingContent = {
+                        // Dev-network faucet (LocalNet/DevNet): lets an empty
+                        // wallet fund itself. See WalletModel.getTestFunds.
+                        Button(
+                            onClick = { model.getTestFundsAsync() },
+                            enabled = !model.funding,
+                            modifier = Modifier.padding(top = 8.dp),
+                        ) {
+                            if (model.funding) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.size(8.dp))
+                            }
+                            Text(if (model.funding) "Getting test funds…" else "Get test funds")
+                        }
+                    },
+                )
             }
         }
         val groups = model.holdings

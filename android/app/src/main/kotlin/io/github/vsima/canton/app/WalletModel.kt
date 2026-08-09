@@ -8,16 +8,25 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.daml.ledger.api.v2.CommandServiceGrpcKt
+import com.daml.ledger.api.v2.CommandServiceOuterClass.SubmitAndWaitRequest
+import com.daml.ledger.api.v2.CommandsOuterClass
+import com.daml.ledger.api.v2.ValueOuterClass
+import io.github.vsima.canton.DamlValues
 import io.github.vsima.canton.wallet.AllocatedExternalParty
 import io.github.vsima.canton.wallet.ExternalPartyClient
 import io.github.vsima.canton.wallet.Holding
 import io.github.vsima.canton.wallet.ScanClient
 import io.github.vsima.canton.wallet.SigningDriver
+import io.github.vsima.canton.wallet.TokenStandard
 import io.github.vsima.canton.wallet.TokenStandardClient
+import io.github.vsima.canton.wallet.Transfer
 import io.github.vsima.canton.wallet.TransferInstruction
 import io.github.vsima.canton.wallet.TransferInstructionChoice
 import io.github.vsima.canton.wallet.TransferInstructionStatus
 import io.github.vsima.canton.wallet.TransferRegistryClient
+import io.github.vsima.canton.wallet.ValidatorClient
+import io.github.vsima.canton.wallet.ValidatorException
 import io.github.vsima.canton.wallet.android.AndroidKeystoreSigningDriver
 import io.grpc.CallOptions
 import io.grpc.Channel
@@ -31,9 +40,19 @@ import io.grpc.MethodDescriptor
 import io.grpc.okhttp.OkHttpChannelBuilder
 import java.math.BigDecimal
 import java.net.InetAddress
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 
@@ -131,6 +150,10 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
     var lastError by mutableStateOf<String?>(null)
         private set
     var busy by mutableStateOf(false)
+    /** True while the dev faucet ([getTestFunds]) runs — drives the inline
+     *  progress on the "Get test funds" affordance. */
+    var funding by mutableStateOf(false)
+        private set
     /** Contract ids with an in-flight accept/reject, so only the tapped
      *  row's buttons disable — not the whole inbox. */
     var processing by mutableStateOf(setOf<String>())
@@ -405,6 +428,134 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         }
     }
 
+    fun getTestFundsAsync() {
+        scope.launch { getTestFunds() }
+    }
+
+    /**
+     * Dev faucet: funds this wallet with test CC by tapping the validator's
+     * wallet and token-standard-transferring the CC here — the same flow the
+     * SDK's `LocalNetFaucetTool` drives from a shell, in-app so an empty
+     * wallet can seed itself (and demo the transfer flow doing it).
+     *
+     * The tap leg goes through [ValidatorClient] as the validator wallet
+     * user (the LocalNet unsafe JWT — the same auth the ledger connection
+     * uses); the transfer leg submits the registry's
+     * `TransferFactory_Transfer` as that operator party over the command
+     * service. If this wallet has instant receiving on, the funds settle
+     * directly; otherwise they arrive as an inbox offer to accept — the
+     * faucet never auto-accepts.
+     *
+     * This is a LocalNet/DevNet developer feature. The reference app only
+     * targets dev networks today, so the button is always shown; on a
+     * network without a tap (or with the validator API unreachable) the
+     * attempt fails and the error is surfaced honestly via [lastError].
+     */
+    suspend fun getTestFunds() {
+        val plain = channel ?: return
+        val receiver = partyId ?: return
+        if (funding) return
+        funding = true
+        try {
+            // 1. Onboard the validator wallet user (idempotent) and tap.
+            val validator = ValidatorClient(
+                WalletEnvironment.validatorUrl,
+                { WalletEnvironment.unsafeJwt(WalletEnvironment.walletUser) },
+                WalletEnvironment.http,
+            )
+            val status = runCatching { validator.userStatus() }.getOrNull()
+            val operatorParty =
+                if (status != null && status.userOnboarded && status.partyId.isNotEmpty()) status.partyId
+                else validator.register()
+            val mintedCid = tapWithRetry(validator)
+            Log.i("WALLET", "faucet tapped $FAUCET_TAP_USD USD to ${operatorParty.take(24)}…")
+
+            // 2. Wait for the mint among the operator's unlocked holdings —
+            //    the transfer's input UTXOs.
+            val operatorChannel = WalletEnvironment.authed(plain, WalletEnvironment.walletUser)
+            val operatorTokens = tokens(operatorChannel)
+            var inputs = listOf<Holding>()
+            for (attempt in 1..10) {
+                inputs = operatorTokens.listHoldings(operatorParty).filter { it.lock == null }
+                if (inputs.any { it.contractId == mintedCid }) break
+                delay(500)
+            }
+            val instrument = inputs.firstOrNull()?.instrumentId
+                ?: error("tapped funds not visible in the validator wallet yet — try again")
+
+            // 3. Token-standard transfer operator → this wallet, via the
+            //    registry's transfer factory (with its disclosed contracts).
+            val transfer = Transfer(
+                sender = operatorParty,
+                receiver = receiver,
+                amount = FAUCET_SEND_CC,
+                instrumentId = instrument,
+                requestedAt = java.time.Instant.now(),
+                executeBefore = java.time.Instant.now().plusSeconds(24 * 3600),
+                inputHoldingCids = inputs.map { it.contractId },
+                meta = mapOf(MEMO_KEY to "Test funds"),
+            )
+            val factory = TransferRegistryClient(WalletEnvironment.registryUrl, WalletEnvironment.http)
+                .transferFactory(FaucetValues.transferFactoryChoiceArguments(instrument.admin, transfer))
+            CommandServiceGrpcKt.CommandServiceCoroutineStub(operatorChannel).submitAndWait(
+                SubmitAndWaitRequest.newBuilder()
+                    .setCommands(
+                        CommandsOuterClass.Commands.newBuilder()
+                            .setCommandId(java.util.UUID.randomUUID().toString())
+                            .setUserId(WalletEnvironment.walletUser)
+                            .addActAs(operatorParty)
+                            .addCommands(
+                                CommandsOuterClass.Command.newBuilder().setExercise(
+                                    CommandsOuterClass.ExerciseCommand.newBuilder()
+                                        .setTemplateId(TokenStandard.transferFactoryInterfaceId)
+                                        .setContractId(factory.factoryId)
+                                        .setChoice("TransferFactory_Transfer")
+                                        .setChoiceArgument(
+                                            DamlValues.record(
+                                                "expectedAdmin" to DamlValues.party(instrument.admin),
+                                                "transfer" to FaucetValues.transferValue(transfer),
+                                                "extraArgs" to FaucetValues.extraArgsValue(
+                                                    factory.choiceContext.choiceContextData
+                                                ),
+                                            )
+                                        )
+                                )
+                            )
+                            .addAllDisclosedContracts(
+                                factory.choiceContext.disclosedContracts.map { it.toProto() }
+                            )
+                    )
+                    .build()
+            )
+            Log.i("WALLET", "faucet sent $FAUCET_SEND_CC CC (kind=${factory.transferKind})")
+            refresh()
+        } catch (error: Exception) {
+            lastError = error.toString()
+            Log.i("WALLET", "faucet failed: $error")
+        } finally {
+            funding = false
+        }
+    }
+
+    /** Taps the faucet, retrying the transient statuses the SDK documents
+     *  (no open mining round yet, load shedding) with a stable command id
+     *  so retries deduplicate instead of double-minting. */
+    private suspend fun tapWithRetry(validator: ValidatorClient): String {
+        val commandId = java.util.UUID.randomUUID().toString()
+        var last: Exception? = null
+        for (attempt in 1..4) {
+            try {
+                return validator.tap(FAUCET_TAP_USD, commandId)
+            } catch (error: ValidatorException) {
+                if (error.statusCode !in setOf(400, 404, 429, 503)) throw error
+                last = error
+                Log.i("WALLET", "faucet tap attempt $attempt: $error")
+                if (attempt < 4) delay(2_000)
+            }
+        }
+        throw last ?: IllegalStateException("tap failed")
+    }
+
     private fun tokens(channel: Channel): TokenStandardClient =
         TokenStandardClient(
             channel,
@@ -414,5 +565,134 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
     companion object {
         /** Convention key for human-readable transfer memos. */
         const val MEMO_KEY = "splice.lfdecentralizedtrust.org/reason"
+
+        /** The faucet taps $26 — 5200 CC at LocalNet's 0.005 USD/CC — and
+         *  forwards a round 5000 CC, leaving the operator headroom for the
+         *  Amulet transfer fees it pays as sender. */
+        val FAUCET_TAP_USD: BigDecimal = BigDecimal("26.0")
+        val FAUCET_SEND_CC: BigDecimal = BigDecimal("5000.0")
     }
+}
+
+/**
+ * Daml-JSON ⇄ proto bridging for the dev faucet's operator-side transfer.
+ *
+ * Mirrors the SDK's internal `ChoiceContextJson`/`toValue` helpers: the
+ * faucet submits `TransferFactory_Transfer` as the participant-managed
+ * validator wallet party over the raw command service — a leg the public
+ * SDK surface doesn't cover (its `createTransfer` signs externally) — so
+ * the app encodes the choice arguments itself from public SDK types.
+ */
+private object FaucetValues {
+
+    /** `TransferFactory_Transfer` choice arguments in Daml JSON API encoding,
+     *  for the registry's `GetFactoryRequest.choiceArguments`. */
+    fun transferFactoryChoiceArguments(expectedAdmin: String, transfer: Transfer): JsonObject =
+        buildJsonObject {
+            put("expectedAdmin", expectedAdmin)
+            putJsonObject("transfer") {
+                put("sender", transfer.sender)
+                put("receiver", transfer.receiver)
+                put("amount", transfer.amount.toPlainString())
+                putJsonObject("instrumentId") {
+                    put("admin", transfer.instrumentId.admin)
+                    put("id", transfer.instrumentId.id)
+                }
+                put("requestedAt", transfer.requestedAt.toString())
+                put("executeBefore", transfer.executeBefore.toString())
+                putJsonArray("inputHoldingCids") {
+                    transfer.inputHoldingCids.forEach { add(JsonPrimitive(it)) }
+                }
+                putJsonObject("meta") {
+                    putJsonObject("values") {
+                        transfer.meta.forEach { (k, v) -> put(k, v) }
+                    }
+                }
+            }
+            putJsonObject("extraArgs") {
+                putJsonObject("context") { putJsonObject("values") {} }
+                putJsonObject("meta") { putJsonObject("values") {} }
+            }
+        }
+
+    /** The transfer specification as a proto record for the choice argument. */
+    fun transferValue(transfer: Transfer): ValueOuterClass.Value =
+        DamlValues.record(
+            "sender" to DamlValues.party(transfer.sender),
+            "receiver" to DamlValues.party(transfer.receiver),
+            "amount" to DamlValues.numeric(transfer.amount),
+            "instrumentId" to DamlValues.record(
+                "admin" to DamlValues.party(transfer.instrumentId.admin),
+                "id" to DamlValues.text(transfer.instrumentId.id),
+            ),
+            "requestedAt" to DamlValues.timestamp(transfer.requestedAt),
+            "executeBefore" to DamlValues.timestamp(transfer.executeBefore),
+            "inputHoldingCids" to DamlValues.list(
+                transfer.inputHoldingCids.map { DamlValues.contractId(it) }
+            ),
+            "meta" to metadataValue(transfer.meta),
+        )
+
+    /** `ExtraArgs { context, meta }` from the registry's `choiceContextData`. */
+    fun extraArgsValue(choiceContextData: JsonElement?): ValueOuterClass.Value {
+        val values = when (choiceContextData) {
+            null, is JsonNull -> emptyMap()
+            is JsonObject -> (choiceContextData["values"] as? JsonObject)
+                ?.mapValues { anyValueToValue(it.value) } ?: emptyMap()
+            else -> error("choiceContextData must be an object, was $choiceContextData")
+        }
+        return DamlValues.record(
+            "context" to DamlValues.record("values" to textMapValue(values)),
+            "meta" to metadataValue(emptyMap()),
+        )
+    }
+
+    /** One `AnyValue` variant from Daml JSON to its proto encoding. */
+    private fun anyValueToValue(json: JsonElement): ValueOuterClass.Value {
+        val obj = json as? JsonObject ?: error("AnyValue must be a tagged object, was $json")
+        val tag = (obj["tag"] as? JsonPrimitive)?.content ?: error("AnyValue object missing tag: $obj")
+        val value = obj["value"] ?: JsonNull
+        fun primitive(): String =
+            (value as? JsonPrimitive)?.content ?: error("$tag value must be a primitive, was $value")
+        val payload = when (tag) {
+            "AV_Text" -> DamlValues.text(primitive())
+            "AV_Int" -> DamlValues.int64(primitive().toLong())
+            "AV_Decimal" -> DamlValues.numeric(primitive())
+            "AV_Bool" -> DamlValues.bool(primitive().toBooleanStrict())
+            "AV_Date" -> DamlValues.date(java.time.LocalDate.parse(primitive()))
+            "AV_Time" -> DamlValues.timestamp(java.time.Instant.parse(primitive()))
+            "AV_RelTime" -> DamlValues.record(
+                "microseconds" to DamlValues.int64(
+                    ((((value as? JsonObject)?.get("microseconds")) ?: value) as? JsonPrimitive)
+                        ?.content?.toLong() ?: error("AV_RelTime value must carry microseconds")
+                )
+            )
+            "AV_Party" -> DamlValues.party(primitive())
+            "AV_ContractId" -> DamlValues.contractId(primitive())
+            "AV_List" -> DamlValues.list(
+                (value as? JsonArray ?: error("AV_List value must be an array"))
+                    .map { anyValueToValue(it) }
+            )
+            "AV_Map" -> textMapValue(
+                (value as? JsonObject ?: error("AV_Map value must be an object"))
+                    .mapValues { anyValueToValue(it.value) }
+            )
+            else -> error("unknown AnyValue constructor $tag")
+        }
+        return DamlValues.variant(tag, payload)
+    }
+
+    private fun metadataValue(meta: Map<String, String>): ValueOuterClass.Value =
+        DamlValues.record("values" to textMapValue(meta.mapValues { DamlValues.text(it.value) }))
+
+    private fun textMapValue(entries: Map<String, ValueOuterClass.Value>): ValueOuterClass.Value =
+        ValueOuterClass.Value.newBuilder()
+            .setTextMap(
+                ValueOuterClass.TextMap.newBuilder().addAllEntries(
+                    entries.map { (key, value) ->
+                        ValueOuterClass.TextMap.Entry.newBuilder().setKey(key).setValue(value).build()
+                    }
+                )
+            )
+            .build()
 }
