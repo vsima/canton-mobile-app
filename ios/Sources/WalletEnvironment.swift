@@ -17,6 +17,9 @@ struct WalletEnvironment: Sendable {
     let scanURL: String
     let validatorURL: String
     let userId: String
+    /// The validator wallet user (the operator side of the dev faucet) —
+    /// LocalNet's `app-user`, same as the Android twin.
+    let walletUser: String
     /// Dev-only: mints the LocalNet `unsafe-jwt-hmac-256` token in-app.
     /// Anything beyond LocalNet must inject a real token provider instead.
     let unsafeJWTSecret: String?
@@ -37,21 +40,27 @@ struct WalletEnvironment: Sendable {
             scanURL: env["CANTON_SCAN_URL"] ?? "http://scan.localhost:4000/api/scan",
             validatorURL: env["CANTON_VALIDATOR_URL"] ?? "http://wallet.localhost:2000/api/validator",
             userId: env["CANTON_USER"] ?? "ledger-api-user",
+            walletUser: env["CANTON_WALLET_USER"] ?? "app-user",
             unsafeJWTSecret: "unsafe",
             jwtAudience: "https://canton.network.global"
         )
     }
 
     func makeClient() -> CantonClient {
+        makeClient(user: userId)
+    }
+
+    /// A client authenticated as `user` on the same participant — the dev
+    /// faucet submits the validator wallet's transfer leg as `walletUser`.
+    func makeClient(user: String) -> CantonClient {
         CantonClient(
             configuration: .init(
                 host: ledgerHost,
                 port: ledgerPort,
                 useTLS: false,
                 accessTokenProvider: unsafeJWTSecret.map { secret in
-                    let sub = userId
                     let audience = jwtAudience
-                    return { @Sendable in Self.unsafeJWT(sub: sub, audience: audience, secret: secret) }
+                    return { @Sendable in Self.unsafeJWT(sub: user, audience: audience, secret: secret) }
                 }
             )
         )

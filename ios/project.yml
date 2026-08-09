@@ -19,6 +19,10 @@ targets:
         product: CantonKit
       - package: canton-mobile-sdk
         product: CantonWalletKit
+      # The dev faucet builds its operator-side command submission from the
+      # generated Ledger API protos directly.
+      - package: canton-mobile-sdk
+        product: CantonLedgerAPI
     info:
       path: Info.plist
       properties:

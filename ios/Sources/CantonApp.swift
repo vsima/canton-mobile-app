@@ -181,10 +181,17 @@ struct PortfolioView: View {
                     }
                     .padding(.vertical, 8)
                 }
-                Section("Holdings") {
+                Section {
                     if model.holdings.isEmpty {
-                        Text("No holdings yet — receive CC to get started.")
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("No holdings yet — receive CC to get started.")
+                                .foregroundStyle(.secondary)
+                            // Dev-network faucet (LocalNet/DevNet): lets an
+                            // empty wallet fund itself. See
+                            // WalletModel.getTestFunds.
+                            GetTestFundsButton(prominent: true)
+                        }
+                        .padding(.vertical, 4)
                     }
                     ForEach(holdingGroups) { group in
                         Button {
@@ -207,6 +214,17 @@ struct PortfolioView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                    }
+                } header: {
+                    // The faucet affordance lives beside the Holdings header
+                    // once funded (low-key), and in the empty state above
+                    // (prominent) — mirrored on Android.
+                    HStack {
+                        Text("Holdings")
+                        Spacer()
+                        if !model.holdings.isEmpty {
+                            GetTestFundsButton(prominent: false)
+                        }
                     }
                 }
                 if let error = model.lastError {
@@ -260,6 +278,46 @@ struct PortfolioView: View {
         format.maximumFractionDigits = 4
         return format
     }()
+}
+
+/// "Get test funds": the dev-network faucet affordance (see
+/// WalletModel.getTestFunds). Prominent in the Portfolio empty state,
+/// low-key beside the Holdings header once funded; inline progress while
+/// the faucet runs; failures surface through the model's lastError.
+private struct GetTestFundsButton: View {
+    @Environment(WalletModel.self) private var model
+    let prominent: Bool
+
+    var body: some View {
+        if prominent {
+            Button {
+                Task { await model.getTestFunds() }
+            } label: {
+                label
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.funding)
+        } else {
+            Button {
+                Task { await model.getTestFunds() }
+            } label: {
+                label.font(.footnote)
+            }
+            .buttonStyle(.borderless)
+            .textCase(nil)
+            .disabled(model.funding)
+        }
+    }
+
+    private var label: some View {
+        HStack(spacing: 6) {
+            if model.funding {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(model.funding ? "Getting test funds…" : "Get test funds")
+        }
+    }
 }
 
 /// The contracts backing a rolled-up holdings row: the balance is not a
