@@ -622,6 +622,10 @@ private fun SendScreen(model: WalletModel) {
     var amount by remember { mutableStateOf("") }
     var memo by remember { mutableStateOf("") }
 
+    // Prewarm/refresh the cached fee config as the amount changes; the
+    // estimate itself recomputes from cache — no network call per keystroke.
+    LaunchedEffect(amount) { model.ensureFeePreviewFresh() }
+
     Column(
         Modifier.padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -660,16 +664,25 @@ private fun SendScreen(model: WalletModel) {
             label = { Text("Amount (CC)") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             supportingText = {
-                Row {
-                    Text("Available: ${model.totalAmulet.cc()} CC")
-                    Spacer(Modifier.size(12.dp))
-                    Text(
-                        "MAX",
-                        modifier = androidx.compose.ui.Modifier.clickable {
-                            amount = model.totalAmulet.stripTrailingZeros().toPlainString()
-                        },
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                Column {
+                    Row {
+                        Text("Available: ${model.totalAmulet.cc()} CC")
+                        Spacer(Modifier.size(12.dp))
+                        Text(
+                            "MAX",
+                            modifier = androidx.compose.ui.Modifier.clickable {
+                                amount = model.totalAmulet.stripTrailingZeros().toPlainString()
+                            },
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    // Appears once the amount parses positive and the cached
+                    // scan config is available; absent otherwise. 0 CC on
+                    // today's networks (CIP-0078) — see
+                    // WalletModel.estimatedFee for the honesty note.
+                    amount.toBigDecimalOrNull()?.let { model.estimatedFee(it) }?.let { fee ->
+                        Text("Network fee: ${fee.cc()} CC")
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth(),

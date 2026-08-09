@@ -16,17 +16,21 @@ import io.github.vsima.canton.DamlValues
 import io.github.vsima.canton.wallet.AllocatedExternalParty
 import io.github.vsima.canton.wallet.ExternalPartyClient
 import io.github.vsima.canton.wallet.Holding
+import io.github.vsima.canton.wallet.OpenMiningRound
 import io.github.vsima.canton.wallet.ScanClient
 import io.github.vsima.canton.wallet.SigningDriver
 import io.github.vsima.canton.wallet.TokenStandard
 import io.github.vsima.canton.wallet.TokenStandardClient
 import io.github.vsima.canton.wallet.Transfer
+import io.github.vsima.canton.wallet.TransferFeeEstimator
+import io.github.vsima.canton.wallet.TransferFeeSchedule
 import io.github.vsima.canton.wallet.TransferInstruction
 import io.github.vsima.canton.wallet.TransferInstructionChoice
 import io.github.vsima.canton.wallet.TransferInstructionStatus
 import io.github.vsima.canton.wallet.TransferRegistryClient
 import io.github.vsima.canton.wallet.ValidatorClient
 import io.github.vsima.canton.wallet.ValidatorException
+import io.github.vsima.canton.wallet.latestUsable
 import io.github.vsima.canton.wallet.android.AndroidKeystoreSigningDriver
 import io.grpc.CallOptions
 import io.grpc.Channel
@@ -365,6 +369,70 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
         }
     }
 
+    /** The scan reads feeding [estimatedFee]: the USD fee schedule plus the
+     *  open rounds carrying the CC price. Compose state, so the fee row
+     *  appears once the lazy fetch lands. */
+    private data class FeePreviewInputs(
+        val schedule: TransferFeeSchedule,
+        val rounds: List<OpenMiningRound>,
+    )
+
+    private var feePreview by mutableStateOf<FeePreviewInputs?>(null)
+    private var feePreviewAttemptedAt: java.time.Instant = java.time.Instant.EPOCH
+    private var feePreviewInFlight = false
+
+    /**
+     * The estimated network fee in CC for sending [amountCc] — the SDK's
+     * [TransferFeeEstimator] over the cached AmuletRules schedule, converted
+     * at the latest usable open round's price. Null when the amount isn't
+     * positive or the cache is empty (scan unreachable / not fetched yet) —
+     * the fee row is simply absent then; never an error state. Pure cache
+     * read: [ensureFeePreviewFresh] populates it.
+     *
+     * Known reality: CIP-0078 zeroed all Canton Coin transfer fees by
+     * governance vote, and splice >= 0.5.16 (CIP-0107) hardcodes them to
+     * zero — so on every current network this estimate is 0. The row is the
+     * reference wiring for fee-charging registries/configs, and the app
+     * renders the honest value, whatever the network's schedule says.
+     */
+    fun estimatedFee(amountCc: BigDecimal): BigDecimal? {
+        if (amountCc.signum() <= 0) return null
+        val inputs = feePreview ?: return null
+        val price = inputs.rounds.latestUsable()?.amuletPriceUsd ?: return null
+        if (price.signum() <= 0) return null
+        return TransferFeeEstimator.estimate(inputs.schedule, price, amountCc).feeCc
+    }
+
+    /**
+     * Lazily (re)fetches the fee-preview inputs from scan — at most one
+     * attempt per [FEE_PREVIEW_TTL] (rounds rotate every ~2.5–10 minutes),
+     * so per-keystroke calls recompute from cache and never hit the network.
+     * Fire-and-forget on the model's scope: it never blocks or fails the
+     * send path; on any error the preview is just absent.
+     */
+    fun ensureFeePreviewFresh() {
+        val now = java.time.Instant.now()
+        if (feePreviewInFlight ||
+            java.time.Duration.between(feePreviewAttemptedAt, now) < FEE_PREVIEW_TTL
+        ) return
+        feePreviewAttemptedAt = now
+        feePreviewInFlight = true
+        scope.launch {
+            try {
+                val scan = ScanClient(WalletEnvironment.scanUrl, WalletEnvironment.http)
+                val config = scan.amuletRulesConfig()
+                val rounds = scan.openMiningRounds()
+                feePreview = FeePreviewInputs(config.transferFees, rounds)
+            } catch (error: Exception) {
+                // Preview only: keep whatever cache exists; the row just
+                // stays absent when there is none.
+                Log.i("WALLET", "fee preview fetch failed: $error")
+            } finally {
+                feePreviewInFlight = false
+            }
+        }
+    }
+
     private suspend fun exercise(instruction: TransferInstruction, choice: TransferInstructionChoice) {
         val authed = authedChannel ?: return
         val driver = driver ?: return
@@ -571,6 +639,10 @@ class WalletModel(private val prefs: android.content.SharedPreferences) {
          *  Amulet transfer fees it pays as sender. */
         val FAUCET_TAP_USD: BigDecimal = BigDecimal("26.0")
         val FAUCET_SEND_CC: BigDecimal = BigDecimal("5000.0")
+
+        /** At most one fee-preview scan fetch per window; rounds rotate
+         *  every ~2.5–10 minutes, so a few minutes of staleness is fine. */
+        private val FEE_PREVIEW_TTL: java.time.Duration = java.time.Duration.ofMinutes(3)
     }
 }
 
