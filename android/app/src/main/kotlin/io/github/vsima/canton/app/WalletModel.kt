@@ -317,9 +317,30 @@ class WalletModel(
             lastError = null
             Log.i("WALLET", "holdings=$totalAmulet inbox=${inbox.size} history=${history.size}")
         } catch (error: Exception) {
-            lastError = error.toString()
-            Log.i("WALLET", "refresh failed: $error")
+            lastError = describe(error)
+            Log.i("WALLET", "refresh failed: ${describe(error)}")
         }
+    }
+
+    /**
+     * gRPC failures print as just their code when the status carries no
+     * description — "UNAVAILABLE" on its own says nothing about whether the
+     * ledger was unreachable, shutting down, or refusing the request. Pull
+     * out the description and the wrapped causes, which is where the
+     * answer usually is.
+     */
+    private fun describe(error: Throwable): String {
+        val causes = generateSequence(error.cause) { it.cause }
+            .take(3)
+            .joinToString(" <- ") { "${it::class.java.simpleName}: ${it.message}" }
+        val head = when (error) {
+            is io.grpc.StatusException -> "gRPC ${error.status.code}" +
+                (error.status.description?.let { ": $it" } ?: "")
+            is io.grpc.StatusRuntimeException -> "gRPC ${error.status.code}" +
+                (error.status.description?.let { ": $it" } ?: "")
+            else -> error.toString()
+        }
+        return if (causes.isEmpty()) head else "$head [caused by $causes]"
     }
 
     fun accept(instruction: TransferInstruction) {
