@@ -102,7 +102,10 @@ object WalletEnvironment {
         OkHttpChannelBuilder.forAddress(hostBridge, ledgerPort).usePlaintext().build()
 
     fun authed(channel: Channel, sub: String): Channel {
-        val token = unsafeJwt(sub)
+        // Minted per call, not captured once: LocalNet's dev JWT never
+        // expires, but a captured token is the pattern that breaks the
+        // first time this code meets a real IdP — against one, hold an
+        // SDK CachingTokenProvider here and take token() per call.
         return ClientInterceptors.intercept(channel, object : ClientInterceptor {
             override fun <ReqT, RespT> interceptCall(
                 method: MethodDescriptor<ReqT, RespT>,
@@ -115,7 +118,7 @@ object WalletEnvironment {
                     override fun start(listener: Listener<RespT>, headers: Metadata) {
                         headers.put(
                             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER),
-                            "Bearer $token",
+                            "Bearer ${unsafeJwt(sub)}",
                         )
                         super.start(listener, headers)
                     }
