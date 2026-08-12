@@ -13,9 +13,6 @@ import com.daml.ledger.api.v2.CommandServiceOuterClass.SubmitAndWaitRequest
 import com.daml.ledger.api.v2.CommandsOuterClass
 import com.daml.ledger.api.v2.ValueOuterClass
 import io.github.vsima.canton.DamlValues
-import io.github.vsima.canton.dapp.DappWallet
-import io.github.vsima.canton.dapp.DappWalletStatus
-import io.github.vsima.canton.dapp.wallet.SigningDriverMessageSigner
 import io.github.vsima.canton.wallet.AllocatedExternalParty
 import io.github.vsima.canton.wallet.ExternalPartyClient
 import io.github.vsima.canton.wallet.Holding
@@ -196,55 +193,6 @@ class WalletModel(
     private var driver: SigningDriver? = null
     private var allocated: AllocatedExternalParty? = null
     private var synchronizerId: String? = null
-
-    /** The wallet's CIP-0103 LAN provider, once started; null when not listening. */
-    var dappProvider by mutableStateOf<DappProviderController?>(null)
-        private set
-
-    /** Starts (or does nothing if already running) the LAN provider for dApps. */
-    fun startDappProvider() {
-        if (dappProvider != null) return
-        val driver = driver ?: return
-        val party = allocated ?: return
-        scope.launch {
-            val account = buildDappAccount(driver, party)
-            val controller = DappProviderController(
-                account = account,
-                messageSigner = SigningDriverMessageSigner(driver),
-                networkId = "canton:localnet",
-                scope = scope,
-            )
-            controller.start()
-            dappProvider = controller
-        }
-    }
-
-    fun stopDappProvider() {
-        dappProvider?.stop()
-        dappProvider = null
-    }
-
-    /** The wallet's onboarded party as a CIP-0103 account, with its real
-     *  public key so a dApp can verify a signed sign-in message. */
-    private suspend fun buildDappAccount(
-        driver: SigningDriver,
-        party: AllocatedExternalParty,
-    ): DappWallet {
-        val spkiHex = driver.publicKey().keyData.toByteArray()
-            .joinToString("") { "%02x".format(it) }
-        return DappWallet(
-            primary = true,
-            partyId = party.partyId,
-            status = DappWalletStatus.ALLOCATED,
-            hint = party.partyId.substringBefore("::"),
-            publicKey = spkiHex,
-            // The party's key fingerprint; the default keyFingerprint the
-            // prepare pipeline will use reads this field.
-            namespace = party.publicKeyFingerprint,
-            networkId = "canton:localnet",
-            signingProviderId = if (hardwareSigner) "android-keystore" else "software",
-        )
-    }
 
     val totalAmulet: BigDecimal
         get() = holdings.fold(BigDecimal.ZERO) { total, holding -> total + holding.amount }
