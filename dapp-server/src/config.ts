@@ -19,6 +19,20 @@ export interface Config {
   nonceTtlSeconds: number;
   /** Clock tolerance when checking `Issued At` / `Expiration Time`. */
   clockSkewSeconds: number;
+
+  /** The merchant party the ledger watcher settles orders against. When unset,
+   *  orders still work but nothing auto-settles (no party to watch). */
+  merchantParty?: string;
+  /** How often the watcher polls for new payments. */
+  watchIntervalMs: number;
+  /** JSON Ledger API of the merchant party's participant. */
+  ledgerClientUrl: string;
+  /** Token registry base URL. */
+  registryUrl: string;
+  /** Validator API base URL. */
+  validatorUrl: string;
+  /** Ledger API user the dev token authenticates as. */
+  ledgerUserId: string;
 }
 
 function str(name: string, fallback: string): string {
@@ -37,6 +51,7 @@ function int(name: string, fallback: number): number {
 export function loadConfig(): Config {
   const port = int('PORT', 8088);
   const domain = str('DAPP_DOMAIN', `localhost:${port}`);
+  const merchantParty = process.env['MERCHANT_PARTY'];
   return {
     port,
     domain,
@@ -44,5 +59,12 @@ export function loadConfig(): Config {
     networkId: str('DAPP_NETWORK_ID', 'canton:localnet'),
     nonceTtlSeconds: int('SIWC_NONCE_TTL_SECONDS', 300),
     clockSkewSeconds: int('SIWC_CLOCK_SKEW_SECONDS', 60),
+    ...(merchantParty !== undefined && merchantParty !== '' ? { merchantParty } : {}),
+    watchIntervalMs: int('WATCH_INTERVAL_MS', 4000),
+    // LocalNet defaults (the SDK's localNetStaticConfig values).
+    ledgerClientUrl: str('LEDGER_URL', 'http://localhost:2975/'),
+    registryUrl: str('REGISTRY_URL', 'http://localhost:2000/api/validator/v0/scan-proxy'),
+    validatorUrl: str('VALIDATOR_URL', 'http://localhost:2000/api/validator'),
+    ledgerUserId: str('LEDGER_USER_ID', 'ledger-api-user'),
   };
 }

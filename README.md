@@ -127,7 +127,8 @@ Grouped by platform, so each toolchain builds both apps in one place:
   `CantonDapp` (`Sources/Dapp`).
 - `dapp-server/` — the public [dApp server](dapp-server/README.md) (Node/TS,
   the official `@canton-network` SDKs): the backend a wallet dials out to.
-  Hosts Sign-in-with-Canton today; ledger watching/settlement next.
+  Sign-in-with-Canton plus merchant orders that settle when the payment lands
+  on the ledger.
 
 The two apps deliberately share **no** module: the dApp's independence from
 the wallet stack is the thing being shown, and a shared "common" module would
