@@ -2,6 +2,7 @@
 
 [![android](https://github.com/vsima/canton-mobile-app/actions/workflows/android.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/android.yml)
 [![ios](https://github.com/vsima/canton-mobile-app/actions/workflows/ios.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/ios.yml)
+[![dapp-server](https://github.com/vsima/canton-mobile-app/actions/workflows/dapp-server.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/dapp-server.yml)
 
 Reference apps for the Canton Network — iOS (SwiftUI) and Android (Jetpack
 Compose / Material 3) — built on
@@ -124,6 +125,9 @@ Grouped by platform, so each toolchain builds both apps in one place:
 - `ios/` — one XcodeGen project (`project.yml`, generated and not committed)
   with two schemes: `CantonWallet` (sources in `Sources/Wallet`) and
   `CantonDapp` (`Sources/Dapp`).
+- `dapp-server/` — the public [dApp server](dapp-server/README.md) (Node/TS,
+  the official `@canton-network` SDKs): the backend a wallet dials out to.
+  Hosts Sign-in-with-Canton today; ledger watching/settlement next.
 
 The two apps deliberately share **no** module: the dApp's independence from
 the wallet stack is the thing being shown, and a shared "common" module would
