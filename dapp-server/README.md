@@ -34,6 +34,24 @@ wallet's `listAccounts` publishes. It is bound to the nonce at challenge time,
 so `/siwc/verify` checks the signature against that key rather than trusting one
 from the verify request. `signature` is hex.
 
+### Storefront — a shop over the order book
+
+A browsable shop, the dApp's own frontend served by its backend. Buy a
+product and the page shows what to pay — amount, party, memo — then polls the
+order until the ledger watcher settles it and flips to **Paid ✓**. This is the
+demo: open it, buy a coffee, pay from a Canton wallet, watch it settle.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET`  | `/` | the storefront page (self-contained HTML) |
+| `GET`  | `/shop` | `{ products }` — the catalog |
+| `POST` | `/shop/checkout` | `{ productId }` → `201 { product, order, payment }` |
+
+Checkout creates an order priced in Canton Coin, payable to `MERCHANT_PARTY`.
+Set that party (and point at a running LocalNet) for the shop to be payable
+and to auto-settle; the party should accept incoming transfers directly
+(instant receiving / preapproval) so a payment settles without a manual accept.
+
 ### Merchant orders — ledger watch and settle
 
 A dApp records the payment it expects; the server watches the ledger for the
@@ -79,9 +97,9 @@ matches what the nonce was issued for; and the timestamps are fresh.
 
 ```sh
 npm install
-npm start          # listens on :8088; set MERCHANT_PARTY to enable settlement
-npm test           # node --test — sign-in (golden vector, verify, tamper/domain/expiry/replay) + order matching
-npm run typecheck  # tsc --noEmit
+MERCHANT_PARTY=<party> npm start   # then open http://localhost:8088 for the shop
+npm test                           # node --test — sign-in, order matching, and the shop
+npm run typecheck                  # tsc --noEmit
 ```
 
 Requires Node ≥ 22 (it runs the TypeScript sources directly via Node's native
@@ -112,8 +130,16 @@ environment-driven:
   match → settle pipeline is exercised against a running LocalNet on real
   on-ledger payments (real sender, amount, and memo), and the "watch from now"
   cursor is confirmed not to replay historical payments. Order matching is unit
-  tested. The remaining live step is a fresh end-to-end **send → settle**, which
-  needs a funded payer — a natural demo once the wallet↔server transport lands.
+  tested.
+- **Storefront — done.** Catalog, checkout, and a self-contained page that polls
+  to Paid; served + walked through live against LocalNet. The customer pays from
+  a real Canton wallet.
+- **Headless demo (`npm run demo`) — next.** A simulated customer that allocates
+  and funds a party via the SDK, buys a product, and pays it — so the whole shop
+  loop runs end-to-end with one command and no phone. This is the "fresh
+  send → settle" step; it's the SDK's external-party submission pipeline
+  (`keys.generate` → `party.external` → `amulet.tap` → `token.transfer.create`
+  → `ledger.prepare`/`execute`).
 - **Authoritative party→key binding — still open.** Sign-in currently trusts the
   public key the wallet claimed at connect time; binding it to the party's
   on-ledger key is a focused follow-up now that the ledger connection exists.
