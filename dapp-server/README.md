@@ -13,17 +13,19 @@ apps are clients; the server is public.** The wallet dials out to it.
 
 ## What it does today
 
-**Sign in with Canton** (dApp implementation spec §7.2) — a dApp proves a user
-controls a Canton party by having the wallet sign a structured challenge, which
-this server verifies against the party's public key. It is a convention over
-CIP-0103 `signMessage`, modelled on Sign-In with Ethereum (ERC-4361), and the
-first *external* consumer of the SDK's `DappSignMessage` domain-separation
-scheme — the same 38-byte prefix the Kotlin and Swift wallets sign, verified
-here byte-for-byte against the [shared golden vector](../../canton-mobile-sdk/testdata/dapp/signmessage.json).
+### Sign in with Canton (spec §7.2)
+
+A dApp proves a user controls a Canton party by having the wallet sign a
+structured challenge, which this server verifies against the party's public
+key. It is a convention over CIP-0103 `signMessage`, modelled on Sign-In with
+Ethereum (ERC-4361), and the first *external* consumer of the SDK's
+`DappSignMessage` domain-separation scheme — the same 38-byte prefix the Kotlin
+and Swift wallets sign, verified here byte-for-byte against the
+[shared golden vector](../../canton-mobile-sdk/testdata/dapp/signmessage.json).
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| `GET`  | `/health` | — | service, domain, network, live nonce count |
+| `GET`  | `/health` | — | service, domain, network, live nonces, merchant party, open orders |
 | `POST` | `/siwc/challenge` | `{ party, publicKey, uri?, statement? }` | `{ message, nonce, expiresAt }` |
 | `POST` | `/siwc/verify` | `{ message, signature }` | `200 { ok, party }` or `401 { ok:false, reason }` |
 
@@ -31,6 +33,28 @@ here byte-for-byte against the [shared golden vector](../../canton-mobile-sdk/te
 wallet's `listAccounts` publishes. It is bound to the nonce at challenge time,
 so `/siwc/verify` checks the signature against that key rather than trusting one
 from the verify request. `signature` is hex.
+
+### Merchant orders — ledger watch and settle
+
+A dApp records the payment it expects; the server watches the ledger for the
+matching transfer to land and settles the order. The **customer's wallet moves
+the funds** — the server only watches and confirms, which is the realistic
+split and needs no key on the server. Built on `@canton-network/wallet-sdk`,
+polling `token.holdings` for the merchant party's incoming `TransferIn` events.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| `POST` | `/orders` | `{ amount, payTo?, instrumentId?, memo? }` | `201 { order, payment }` |
+| `GET`  | `/orders` | — | `{ orders }` |
+| `GET`  | `/orders/:id` | — | `{ order }` or `404` |
+
+`payTo` defaults to the configured `MERCHANT_PARTY`. The response's `payment`
+block is what the payer must send — `amount` to `payTo` with `memo` (the order
+id by default) as the transfer memo. An order settles when an incoming payment
+to `payTo` carries that memo and an equal-or-greater amount (and the named
+instrument, if any). Settlement requires `MERCHANT_PARTY` to be set so the
+watcher knows which party to poll; without it, orders are created but never
+auto-settle.
 
 ### The flow
 
@@ -55,13 +79,15 @@ matches what the nonce was issued for; and the timestamps are fresh.
 
 ```sh
 npm install
-npm start          # listens on :8088 (PORT), domain localhost:8088
-npm test           # node --test — golden vector, build/parse, verify (Ed25519 + P-256), tamper/domain/expiry/replay
+npm start          # listens on :8088; set MERCHANT_PARTY to enable settlement
+npm test           # node --test — sign-in (golden vector, verify, tamper/domain/expiry/replay) + order matching
 npm run typecheck  # tsc --noEmit
 ```
 
 Requires Node ≥ 22 (it runs the TypeScript sources directly via Node's native
-type stripping — no build step). Configuration is environment-driven:
+type stripping — no build step). Point it at a running Splice LocalNet (the
+SDK's `integration/run-localnet.sh`) for settlement. Configuration is
+environment-driven:
 
 | Var | Default | Meaning |
 |---|---|---|
@@ -71,23 +97,29 @@ type stripping — no build step). Configuration is environment-driven:
 | `DAPP_NETWORK_ID` | `canton:localnet` | CAIP-2 network id |
 | `SIWC_NONCE_TTL_SECONDS` | `300` | how long a challenge stays valid |
 | `SIWC_CLOCK_SKEW_SECONDS` | `60` | tolerance on `Issued At` / `Expiration Time` |
+| `MERCHANT_PARTY` | — | the party the watcher settles orders against; unset = no auto-settle |
+| `WATCH_INTERVAL_MS` | `4000` | how often the watcher polls for new payments |
+| `LEDGER_URL` | `http://localhost:2975/` | JSON Ledger API of the merchant party's participant |
+| `REGISTRY_URL` | `…:2000/api/validator/v0/scan-proxy` | token registry |
+| `VALIDATOR_URL` | `http://localhost:2000/api/validator` | validator API |
+| `LEDGER_USER_ID` | `ledger-api-user` | user the dev token authenticates as |
 
 ## Status and what's next
 
 - **Sign-in — done and tested**, including a live HTTP round-trip for both key
   algorithms.
-- **Authoritative party→key binding — a known limitation.** The public key is
-  currently the one the wallet claimed at connect time. Binding it to the
-  party's *on-ledger* key is the job of the ledger slice below; until then the
-  server trusts the connecting dApp's claim of the key.
-- **Ledger watching / settlement — next slice.** Read holdings and watch for
-  incoming transfers over `@canton-network/wallet-sdk` (`token` + `events`
-  namespaces) against LocalNet, so the server can also verify a party's key
-  on-ledger and settle merchant-style flows.
-- **The wallet↔server transport — a separate step.** How the wallet actually
-  reaches this server to sign (same-device deep link vs WalletConnect for the
-  public case) is decided and built on its own; nothing here assumes a
-  particular transport.
+- **Ledger watch and settle — done and live-verified.** The full read → parse →
+  match → settle pipeline is exercised against a running LocalNet on real
+  on-ledger payments (real sender, amount, and memo), and the "watch from now"
+  cursor is confirmed not to replay historical payments. Order matching is unit
+  tested. The remaining live step is a fresh end-to-end **send → settle**, which
+  needs a funded payer — a natural demo once the wallet↔server transport lands.
+- **Authoritative party→key binding — still open.** Sign-in currently trusts the
+  public key the wallet claimed at connect time; binding it to the party's
+  on-ledger key is a focused follow-up now that the ledger connection exists.
+- **The wallet↔server transport — a separate step.** How the wallet reaches this
+  server to sign (same-device deep link vs WalletConnect for the public case) is
+  decided and built on its own; nothing here assumes a particular transport.
 
 ## License
 
