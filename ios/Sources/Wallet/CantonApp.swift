@@ -77,6 +77,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
     case send = "Send"
     case receive = "Receive"
     case history = "History"
+    case dapps = "dApps"
 
     var id: String { rawValue }
     var icon: String {
@@ -86,6 +87,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
         case .send: "paperplane"
         case .receive: "qrcode"
         case .history: "clock"
+        case .dapps: "antenna.radiowaves.left.and.right"
         }
     }
 }
@@ -125,6 +127,8 @@ struct WalletTabsView: View {
                         .tabItem { Label("Receive", systemImage: "qrcode") }
                     HistoryView()
                         .tabItem { Label("History", systemImage: "clock") }
+                    DappsView()
+                        .tabItem { Label("dApps", systemImage: "antenna.radiowaves.left.and.right") }
                 }
             }
         }
@@ -138,6 +142,7 @@ struct WalletTabsView: View {
         case .inbox: InboxView()
         case .send: SendView()
         case .receive: ReceiveView()
+        case .dapps: DappsView()
         case .history: HistoryView()
         }
     }

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Victor Sima
+// SPDX-License-Identifier: Apache-2.0
+
 // The CIP-0103 dApp reference (iOS). It links only CantonDappKit — no
 // CantonWalletKit, no signing drivers, no Ledger API stubs — which is the
 // demonstration that the module split holds.
