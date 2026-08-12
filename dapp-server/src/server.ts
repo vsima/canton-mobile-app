@@ -12,6 +12,8 @@ import { loadConfig, type Config } from './config.ts';
 import { NonceStore } from './nonceStore.ts';
 import { buildSignInMessage, verifySignIn } from './siwc.ts';
 import { OrderBook } from './orders.ts';
+import { CATALOG, checkout } from './shop.ts';
+import { storefrontHtml } from './storefront.ts';
 
 /** RFC 3339 UTC with no sub-second component, as the sign-in template wants. */
 function rfc3339(date: Date): string {
@@ -25,6 +27,11 @@ export function createApp(
 ) {
   const app = express();
   app.use(express.json());
+
+  // The storefront — the dApp's own frontend, served by its backend.
+  app.get('/', (_req: Request, res: Response) => {
+    res.type('html').send(storefrontHtml({ merchantParty: config.merchantParty, networkId: config.networkId }));
+  });
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({
@@ -90,6 +97,35 @@ export function createApp(
 
     if (!result.ok) return res.status(401).json({ ok: false, reason: result.reason });
     res.json({ ok: true, party: result.party });
+  });
+
+  // --- Storefront (a shop over the order book) -----------------------------
+
+  app.get('/shop', (_req: Request, res: Response) => {
+    res.json({ products: CATALOG });
+  });
+
+  // Buy a product: creates a payable order priced in Canton Coin, to the
+  // merchant party, referenced by the order id in its memo.
+  app.post('/shop/checkout', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const productId = body['productId'];
+    if (typeof productId !== 'string') {
+      return res.status(400).json({ error: 'productId (string) is required' });
+    }
+    if (config.merchantParty === undefined) {
+      return res.status(409).json({ error: 'no merchant party configured — set MERCHANT_PARTY' });
+    }
+    try {
+      const { product, order } = checkout(productId, config.merchantParty, orders);
+      res.status(201).json({
+        product,
+        order,
+        payment: { payTo: order.payTo, amount: order.amount, instrumentId: order.instrumentId ?? null, memo: order.memo },
+      });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
   });
 
   // --- Merchant orders (settled by the ledger watcher) ---------------------
@@ -169,7 +205,11 @@ export async function startWatcher(
     if (stopped) return;
     try {
       const { payments, nextOffset } = await ledger.incomingPayments(party, cursor);
+      // Advance the cursor forward only: token.holdings returns nextOffset 0
+      // when nothing is new, which must not reset the watch back to genesis.
+      let advanced = cursor;
       for (const payment of payments) {
+        advanced = Math.max(advanced, payment.offset);
         const settled = orders.settleFrom(payment);
         if (settled !== null) {
           log(
@@ -178,7 +218,7 @@ export async function startWatcher(
           );
         }
       }
-      cursor = nextOffset;
+      cursor = Math.max(advanced, nextOffset);
     } catch (e) {
       log(`watch poll failed: ${(e as Error).message}`);
     }
