@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
+import CantonDappKit
+import CantonDappWalletKit
 import CantonKit
 import CantonLedgerAPI
 import CantonWalletKit
@@ -60,6 +62,55 @@ final class WalletModel {
     private var allocated: AllocatedExternalParty?
     private var synchronizerId: String?
     private let store = KeychainWalletStore(service: "io.github.vsima.canton.app.wallet")
+
+    /// The wallet's CIP-0103 LAN provider, once started; nil when not listening.
+    private(set) var dappProvider: DappProviderController?
+
+    /// Starts (or no-ops) the LAN provider so a dApp can connect to this wallet.
+    func startDappProvider() {
+        guard dappProvider == nil, let driver, let allocated else { return }
+        Task {
+            do {
+                let account = try await buildDappAccount(driver: driver, party: allocated)
+                let controller = DappProviderController(
+                    account: account,
+                    messageSigner: SigningDriverMessageSigner(signer: driver),
+                    networkId: "canton:localnet"
+                )
+                try await controller.start()
+                dappProvider = controller
+            } catch {
+                lastError = "Could not start the dApp provider: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func stopDappProvider() {
+        dappProvider?.stop()
+        dappProvider = nil
+    }
+
+    /// The wallet's onboarded party as a CIP-0103 account, carrying its real
+    /// public key so a dApp can verify a signed sign-in message.
+    private func buildDappAccount(
+        driver: any SigningDriver,
+        party: AllocatedExternalParty
+    ) async throws -> DappWallet {
+        let spki = try await driver.publicKey().keyData
+        let hex = spki.map { String(format: "%02x", $0) }.joined()
+        return DappWallet(
+            primary: true,
+            partyId: party.partyId,
+            status: .allocated,
+            hint: String(party.partyId.split(separator: ":").first ?? ""),
+            publicKey: hex,
+            // The party's key fingerprint; the prepare pipeline's default
+            // keyFingerprint reads this field.
+            namespace: party.publicKeyFingerprint,
+            networkId: "canton:localnet",
+            signingProviderId: "software"
+        )
+    }
 
     var totalAmulet: Decimal {
         holdings.reduce(Decimal.zero) { total, holding in

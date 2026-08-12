@@ -29,6 +29,14 @@ targets:
       # generated Ledger API protos directly.
       - package: canton-mobile-sdk
         product: CantonLedgerAPI
+      # The wallet is also a CIP-0103 provider: the engine, the LAN transport
+      # it listens on, and the shared protocol types.
+      - package: canton-mobile-sdk
+        product: CantonDappKit
+      - package: canton-mobile-sdk
+        product: CantonDappWalletKit
+      - package: canton-mobile-sdk
+        product: CantonDappLanKit
     info:
       path: Wallet-Info.plist
       properties:
