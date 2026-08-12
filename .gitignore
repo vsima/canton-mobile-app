@@ -20,3 +20,6 @@ ios/*.xcodeproj
 ios/DerivedData/
 docs/
 log/
+
+# xcodegen-generated Info plists (regenerated on every build)
+ios/*-Info.plist

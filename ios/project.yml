@@ -1,19 +1,25 @@
 # Generate the Xcode project with: xcodegen generate  (brew install xcodegen)
 # The project is not committed — this file is the source of truth.
-name: CantonApp
+#
+# Two reference apps, one project:
+#   CantonWallet — the wallet, links the wallet SDK stack.
+#   CantonDapp   — a CIP-0103 dApp, links ONLY CantonDappKit, so it cannot
+#                  see the signing drivers or Ledger API stubs. The build
+#                  succeeding from that dependency alone is the layering proof.
+name: Canton
 options:
   bundleIdPrefix: io.github.vsima
 packages:
   canton-mobile-sdk:
-    # Sibling checkout of vsima/canton-mobile-sdk, so the app always builds
+    # Sibling checkout of vsima/canton-mobile-sdk, so the apps always build
     # against the SDK working tree. CI reproduces the same layout.
     path: ../../canton-mobile-sdk
 targets:
-  CantonApp:
+  CantonWallet:
     type: application
     platform: iOS
     deploymentTarget: "18.0"
-    sources: [Sources]
+    sources: [Sources/Wallet]
     dependencies:
       - package: canton-mobile-sdk
         product: CantonKit
@@ -24,7 +30,7 @@ targets:
       - package: canton-mobile-sdk
         product: CantonLedgerAPI
     info:
-      path: Info.plist
+      path: Wallet-Info.plist
       properties:
         UILaunchScreen: {}
         UIUserInterfaceStyle: Light
@@ -40,6 +46,29 @@ targets:
               NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
+        # Unchanged from the single-app layout: the installed wallet keeps its
+        # identity (and its device-bound key and party).
         PRODUCT_BUNDLE_IDENTIFIER: io.github.vsima.canton.app
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+  CantonDapp:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [Sources/Dapp]
+    dependencies:
+      - package: canton-mobile-sdk
+        product: CantonDappKit
+    info:
+      path: Dapp-Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Light
+        # Dev builds reach a wallet over the LAN (or loopback) in plaintext.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.vsima.canton.dapp.app
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"

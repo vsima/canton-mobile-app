@@ -3,11 +3,25 @@
 [![android](https://github.com/vsima/canton-mobile-app/actions/workflows/android.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/android.yml)
 [![ios](https://github.com/vsima/canton-mobile-app/actions/workflows/ios.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/ios.yml)
 
-Reference wallets for the Canton Network — iOS (SwiftUI) and Android
-(Jetpack Compose / Material 3) — built on
+Reference apps for the Canton Network — iOS (SwiftUI) and Android (Jetpack
+Compose / Material 3) — built on
 [canton-mobile-sdk](https://github.com/vsima/canton-mobile-sdk). They exist
-to prove the native wallet stack end-to-end with stock platform components:
+to prove the native stack end-to-end with stock platform components:
 everything the apps do goes through the SDK's public API.
+
+**Two references, the two ends of CIP-0103:**
+
+- **The wallet** (`android/wallet-app`, iOS `CantonWallet`) — links the wallet
+  SDK stack: signing drivers, party onboarding, the token standard.
+- **The dApp** (`android/dapp-app`, iOS `CantonDapp`) — a CIP-0103 client that
+  links **only** `canton-dapp` (+ the LAN transport). It has no way to reach a
+  signing driver or the Ledger API stubs, and the R8 release / simulator
+  builds succeeding from that dependency set alone is the demonstration that
+  the SDK's module split holds. This is where the ping, sign-in, and merchant
+  examples land as they come online.
+
+The dApp app is newer than the wallet — the cross-app transport, ping, and
+sign-in flows are landing incrementally; see the SDK's dApp-connectivity work.
 
 ## What they demonstrate
 
@@ -35,11 +49,17 @@ everything the apps do goes through the SDK's public API.
 
 ## Layout
 
-Mirrors the SDK monorepo:
+Grouped by platform, so each toolchain builds both apps in one place:
 
-- `ios/` — SwiftUI app. The Xcode project is generated from `project.yml`
-  with [XcodeGen](https://github.com/yonaskolb/XcodeGen) and not committed.
-- `android/` — Kotlin app (Gradle).
+- `android/` — one Gradle build with two application modules:
+  `wallet-app` and `dapp-app`.
+- `ios/` — one XcodeGen project (`project.yml`, generated and not committed)
+  with two schemes: `CantonWallet` (sources in `Sources/Wallet`) and
+  `CantonDapp` (`Sources/Dapp`).
+
+The two apps deliberately share **no** module: the dApp's independence from
+the wallet stack is the thing being shown, and a shared "common" module would
+be the back door that quietly undoes it.
 
 ## SDK dependency
 
@@ -63,8 +83,8 @@ CI checks out both repos into the same sibling layout.
 ## Building
 
 ```sh
-make ios       # xcodegen generate + simulator build
-make android   # assembleDebug + assembleRelease (R8)
+make ios       # xcodegen generate + simulator build, both schemes
+make android   # assembleDebug + assembleRelease (R8), both modules
 ```
 
 ## Running against a live network
