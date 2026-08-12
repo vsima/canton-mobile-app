@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.Cable
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.QrCode
@@ -143,6 +144,7 @@ private enum class Section(val label: String, val icon: ImageVector) {
     Send("Send", Icons.AutoMirrored.Outlined.Send),
     Receive("Receive", Icons.Outlined.QrCode),
     History("History", Icons.Outlined.History),
+    Dapps("dApps", Icons.Outlined.Cable),
 }
 
 @Composable
@@ -241,6 +243,7 @@ private fun WalletTabs(model: WalletModel) {
                     Section.Send -> SendScreen(model)
                     Section.Receive -> ReceiveScreen(model)
                     Section.History -> HistoryScreen(model)
+                    Section.Dapps -> DappsScreen(model)
                 }
             }
         }
@@ -1010,3 +1013,88 @@ private fun qrBitmap(text: String): Bitmap? = try {
  *  digits — matching the iOS formatter so both apps read the same. */
 private val ccFormat = java.text.DecimalFormat("0.0###")
 private fun java.math.BigDecimal.cc(): String = ccFormat.format(this)
+
+/**
+ * The wallet as a CIP-0103 provider over the LAN. Additive: it drives the
+ * dApp side already shipped in the dApp reference app, and touches nothing in
+ * Send / Portfolio / Inbox.
+ *
+ * Start listening, and a dApp on this device (127.0.0.1) or another on the
+ * LAN can connect. Each connection or signature request raises an approval
+ * sheet — the wallet decides, the dApp only ever receives the result.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DappsScreen(model: WalletModel) {
+    val provider = model.dappProvider
+
+    // The approval sheet: shown whenever the engine is waiting on the user.
+    provider?.pending?.let { pending ->
+        ModalBottomSheet(onDismissRequest = { pending.reject() }) {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(pending.title, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    pending.detail,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                HorizontalDivider()
+                Button(
+                    onClick = { pending.approve() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Approve") }
+                OutlinedButton(
+                    onClick = { pending.reject() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Decline") }
+            }
+        }
+    }
+
+    Column(
+        Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("dApp connections", style = MaterialTheme.typography.titleLarge)
+        if (model.partyId == null) {
+            Text(
+                "Onboard the wallet first — a dApp connects to your party.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Column
+        }
+        Text(
+            "Let a CIP-0103 dApp connect to this wallet over the local network. "
+                + "The wallet approves every connection and signature; keys never leave it.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        if (provider?.listening == true) {
+            Text("Listening on port ${provider.port}", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "A dApp on this device connects to 127.0.0.1:${provider.port}; "
+                    + "one on another device uses this phone's Wi-Fi address and the same port.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = { model.stopDappProvider() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Stop listening") }
+        } else {
+            Button(
+                onClick = { model.startDappProvider() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Start listening") }
+        }
+
+        provider?.lastActivity?.let { activity ->
+            HorizontalDivider()
+            Text("Recent: $activity", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}

@@ -46,6 +46,11 @@ dependencies {
     // version only matters for a standalone build against Maven Central.
     implementation("io.github.vsima.canton:canton-wallet-sdk:0.6.0-SNAPSHOT")
     implementation("io.github.vsima.canton:canton-wallet-android:0.6.0-SNAPSHOT")
+    // The wallet is also a CIP-0103 *provider*: canton-dapp-wallet is the
+    // engine, canton-dapp-lan the transport it listens on. (A dApp links the
+    // dApp side of these; a wallet legitimately links both — it is both.)
+    implementation("io.github.vsima.canton:canton-dapp-wallet:0.6.0-SNAPSHOT")
+    implementation("io.github.vsima.canton:canton-dapp-lan:0.6.0-SNAPSHOT")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // The app builds its own channel + vhost-aware HTTP client.
     implementation("io.grpc:grpc-okhttp:1.83.1")
