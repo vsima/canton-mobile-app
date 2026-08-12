@@ -30,8 +30,13 @@ jobs:
         run: brew install xcodegen
       - name: Generate project
         run: xcodegen generate
-      - name: Build
+      - name: Build wallet
         run: >
-          xcodebuild -project CantonApp.xcodeproj -scheme CantonApp
+          xcodebuild -project Canton.xcodeproj -scheme CantonWallet
+          -destination 'generic/platform=iOS Simulator'
+          build CODE_SIGNING_ALLOWED=NO
+      - name: Build dApp
+        run: >
+          xcodebuild -project Canton.xcodeproj -scheme CantonDapp
           -destination 'generic/platform=iOS Simulator'
           build CODE_SIGNING_ALLOWED=NO
