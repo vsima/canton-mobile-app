@@ -26,6 +26,9 @@ export interface SignInFields {
 export interface SignInOutcome {
   /** The party that signed in — verified against its published key. */
   party: string;
+  /** The WalletConnect session topic, kept alive so the dApp stays connected
+   *  (shown on the wallet's Connect screen) and can push a follow-up payment. */
+  topic: string;
 }
 
 /**
@@ -70,9 +73,13 @@ export async function beginWalletConnectSignIn(
         throw new Error('the signature did not verify against the account key');
       }
       log(`verified — signed in as ${account.partyId.slice(0, 24)}…`);
-      return { party: account.partyId };
-    } finally {
+      return { party: account.partyId, topic: session.topic };
+    } catch (e) {
+      // On failure, tear the session down; on success it persists so the dApp
+      // stays connected (shown on the wallet's Connect screen) and can be reused
+      // for a follow-up payment.
       await dapp.disconnect(session.topic).catch(() => {});
+      throw e;
     }
   })();
   return { uri, done };
