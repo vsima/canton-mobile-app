@@ -173,6 +173,14 @@ and approves, runs the standard `connect → listAccounts → signMessage` Sign-
 verifies the signature. Needs only `WC_PROJECT_ID` (no LocalNet — signing is pure
 crypto). This is what a wallet's WalletConnect binding is tested against on device.
 
+The storefront has the same thing as a **button**: with `WC_PROJECT_ID` set, the
+shop page shows **"Sign in with your wallet"**, which starts a session server-side
+(`POST /siwc-wc/start` → `wc:` URI + QR), renders the QR in the browser, and polls
+`GET /siwc-wc/status/:id` until the wallet signs — flipping to "Signed in as …".
+That is the real dApp UX: the dApp presents the QR, the wallet scans it. The
+WalletConnect client is loaded lazily, so a deployment without `WC_PROJECT_ID`
+simply never offers the button.
+
 Requires Node ≥ 22 (it runs the TypeScript sources directly via Node's native
 type stripping — no build step). Point it at a running Splice LocalNet (the
 SDK's `integration/run-localnet.sh`) for settlement. Configuration is

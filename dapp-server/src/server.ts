@@ -12,6 +12,7 @@ import { loadConfig, type Config } from './config.ts';
 import { NonceStore } from './nonceStore.ts';
 import { buildSignInMessage, verifySignIn } from './siwc.ts';
 import QRCode from 'qrcode';
+import { randomUUID } from 'node:crypto';
 import { OrderBook } from './orders.ts';
 import { CATALOG, checkoutCart, type CartItem } from './shop.ts';
 import { checkoutUri, checkoutView } from './checkout.ts';
@@ -36,6 +37,34 @@ export function createApp(
 ) {
   const app = express();
   app.use(express.json());
+
+  // WalletConnect sign-in state. The client (@walletconnect/sign-client) is
+  // loaded lazily — a dynamic import on first use, like the ledger watcher — so
+  // a deployment that never signs in over WalletConnect never loads it, and no
+  // WC_PROJECT_ID is required. One connector is reused across sign-ins.
+  type WcSignIn = { status: 'pending' | 'signed-in' | 'failed'; party?: string; reason?: string; startedAt: number };
+  const wcSignIns = new Map<string, WcSignIn>();
+  let dappConnectorPromise: Promise<import('./wc/dapp.ts').DappConnector> | null = null;
+
+  function wcProjectConfig(): { projectId: string; relayUrl?: string } | null {
+    const projectId = process.env['WC_PROJECT_ID'];
+    if (projectId === undefined || projectId === '') return null;
+    const relayUrl = process.env['WC_RELAY_URL'];
+    return { projectId, ...(relayUrl !== undefined && relayUrl !== '' ? { relayUrl } : {}) };
+  }
+
+  async function dappConnector(wc: { projectId: string; relayUrl?: string }) {
+    if (dappConnectorPromise === null) {
+      const { DappConnector } = await import('./wc/dapp.ts');
+      dappConnectorPromise = DappConnector.create(wc, config.networkId, {
+        name: config.shopName,
+        description: `Sign in to ${config.shopName}`,
+        url: config.publicUrl,
+        icons: [],
+      });
+    }
+    return dappConnectorPromise;
+  }
 
   // The storefront — the dApp's own frontend, served by its backend.
   app.get('/', (_req: Request, res: Response) => {
@@ -108,6 +137,46 @@ export function createApp(
 
     if (!result.ok) return res.status(401).json({ ok: false, reason: result.reason });
     res.json({ ok: true, party: result.party });
+  });
+
+  // --- Sign in with Canton over WalletConnect (a live session) -------------
+
+  // Start a WalletConnect sign-in: open a session, return its pairing `uri`
+  // (and a QR) at once. The CIP-0103 round-trip — connect → listAccounts →
+  // signMessage → verify — completes in the background when a wallet pairs and
+  // signs; the page polls /siwc-wc/status/:id for the result.
+  app.post('/siwc-wc/start', async (_req: Request, res: Response) => {
+    const wc = wcProjectConfig();
+    if (wc === null) {
+      return res.status(501).json({ error: 'WalletConnect sign-in is not configured — set WC_PROJECT_ID' });
+    }
+    try {
+      const dapp = await dappConnector(wc);
+      const { beginWalletConnectSignIn } = await import('./wc/signin.ts');
+      const { uri, done } = await beginWalletConnectSignIn(dapp, {
+        domain: config.domain,
+        loginUri: config.uri,
+        networkId: config.networkId,
+        shopName: config.shopName,
+      });
+      const id = randomUUID();
+      wcSignIns.set(id, { status: 'pending', startedAt: Date.now() });
+      void done.then(
+        ({ party }) => wcSignIns.set(id, { status: 'signed-in', party, startedAt: Date.now() }),
+        (e: unknown) => wcSignIns.set(id, { status: 'failed', reason: (e as Error).message, startedAt: Date.now() }),
+      );
+      const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
+      res.status(201).json({ id, uri, qrSvg });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  app.get('/siwc-wc/status/:id', (req: Request, res: Response) => {
+    const id = req.params['id'];
+    const state = typeof id === 'string' ? wcSignIns.get(id) : undefined;
+    if (state === undefined) return res.status(404).json({ error: 'no such sign-in' });
+    res.json({ status: state.status, party: state.party ?? null, reason: state.reason ?? null });
   });
 
   // --- Storefront (a shop over the order book) -----------------------------

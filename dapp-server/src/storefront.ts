@@ -94,6 +94,7 @@ export function storefrontHtml(options: StorefrontOptions): string {
 <header>
   <h1 id="shopname">🛍️ Canton Corner</h1>
   <p>A reference dApp shop — scan to pay from your Canton wallet, settled on-ledger.</p>
+  <button id="signin" class="secondary" style="margin-top:10px">🔐 Sign in with your wallet</button>
 </header>
 <main id="app"><p>Loading…</p></main>
 <script>
@@ -296,11 +297,70 @@ function confetti() {
   }
 }
 
+// --- sign in with wallet (WalletConnect) -----------------------------------
+
+function setSiStatus(text, spinning) {
+  var s = document.getElementById('si-status'); if (!s) return;
+  s.innerHTML = '';
+  if (spinning) s.appendChild(h('div', { 'class': 'spinner' }));
+  s.appendChild(h('span', { text: text }));
+}
+
+function showSignIn() {
+  view = 'signin';
+  var cb = document.getElementById('cartbar'); if (cb) cb.remove();
+  var app = document.getElementById('app');
+  app.innerHTML = '';
+  var status = h('div', { 'class': 'statusbar', id: 'si-status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Starting a WalletConnect session…' })]);
+  var qrbox = h('div', { 'class': 'qrbox', id: 'si-qr' });
+  var back = h('button', { 'class': 'ghost', text: '← back to shop' }); back.onclick = showCatalog;
+  app.appendChild(h('div', { 'class': 'panel' }, [
+    h('h2', { text: 'Sign in with your Canton wallet' }),
+    status, qrbox,
+    h('div', { style: 'margin-top:12px' }, [back]),
+  ]));
+  fetch('/siwc-wc/start', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (data) {
+    if (data.error) { setSiStatus(data.error, false); return; }
+    document.getElementById('si-qr').innerHTML = data.qrSvg + '<div class="cap">Open your wallet → Connect tab → scan this</div>';
+    setSiStatus('Waiting for your wallet to connect and sign…', true);
+    pollSignIn(data.id);
+  }).catch(function (e) { setSiStatus(String(e), false); });
+}
+
+function pollSignIn(id) {
+  var timer = setInterval(function () {
+    fetch('/siwc-wc/status/' + id).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.status === 'signed-in') { clearInterval(timer); renderSignedIn(data.party); }
+      else if (data.status === 'failed') { clearInterval(timer); setSiStatus('Sign-in failed: ' + (data.reason || 'declined'), false); }
+    }).catch(function () {});
+  }, 1500);
+}
+
+function renderSignedIn(party) {
+  var app = document.getElementById('app');
+  app.innerHTML = '';
+  var check = h('div', {});
+  check.innerHTML = '<svg viewBox="0 0 52 52" class="checkmark"><circle class="ck-circle" cx="26" cy="26" r="24"/><path class="ck-check" d="M14 27l7 7 16-16"/></svg>';
+  var sub = h('p', { 'class': 'paid-sub', text: 'Authenticated over WalletConnect as' });
+  var code = h('code', { text: party }); code.style.cssText = 'display:block;word-break:break-all;margin-top:6px';
+  sub.appendChild(code);
+  var more = h('button', { text: 'Back to shop' }); more.onclick = showCatalog;
+  app.appendChild(h('div', { 'class': 'success' }, [
+    check,
+    h('h2', { 'class': 'paid-title', text: 'Signed in!' }),
+    sub,
+    more,
+  ]));
+  confetti();
+}
+
 // --- boot ------------------------------------------------------------------
 
 document.title = CONFIG.shop;
 var sn = document.getElementById('shopname');
 if (sn) sn.textContent = '🛍️ ' + CONFIG.shop;
+var siBtn = document.getElementById('signin');
+if (siBtn) siBtn.onclick = showSignIn;
 fetch('/shop').then(function (r) { return r.json(); }).then(function (data) { PRODUCTS = data.products || []; showCatalog(); });
 </script>
 </body>
