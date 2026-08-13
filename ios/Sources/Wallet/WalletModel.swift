@@ -53,6 +53,9 @@ final class WalletModel {
     /// so only the tapped row's buttons disable — not the whole inbox.
     private(set) var processing: Set<String> = []
     var lastSend: SendReceipt?
+    /// A checkout URL delivered by a `canton-checkout:` deep link (`.onOpenURL`),
+    /// awaiting the Send view to parse and prefill it.
+    private(set) var pendingCheckoutUrl: String?
     private(set) var preapproval: ScanClient.TransferPreapprovalInfo?
     private(set) var preapprovalRequested = false
     /// Scan lags the ledger briefly after a cancel; skip re-reading the
@@ -216,6 +219,10 @@ final class WalletModel {
             return nil
         }
     }
+
+    /// Called from a `canton-checkout:` deep link; the Send view picks it up.
+    func requestCheckout(_ url: String) { pendingCheckoutUrl = url }
+    func clearPendingCheckout() { pendingCheckoutUrl = nil }
 
     /// Sends Amulet to another party (two-step unless they're preapproved).
     func send(to receiver: String, amount: Decimal, memo: String = "") async {

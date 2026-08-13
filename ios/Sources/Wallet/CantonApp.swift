@@ -31,6 +31,9 @@ struct WalletRootView: View {
             }
         }
         .task { await model.onboard() }
+        // A canton-checkout: URL (from the Camera / a QR scanner) → the Send
+        // view picks it up, routes there, and prefills.
+        .onOpenURL { url in model.requestCheckout(url.absoluteString) }
     }
 }
 
@@ -95,13 +98,16 @@ enum WalletSection: String, CaseIterable, Identifiable {
 struct WalletTabsView: View {
     @Environment(WalletModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var section: WalletSection? = .portfolio
+    @State private var section: WalletSection = .portfolio
 
     var body: some View {
         Group {
             if sizeClass == .regular {
                 NavigationSplitView {
-                    List(WalletSection.allCases, selection: $section) { item in
+                    List(
+                        WalletSection.allCases,
+                        selection: Binding(get: { Optional(section) }, set: { section = $0 ?? .portfolio })
+                    ) { item in
                         Label(item.rawValue, systemImage: item.icon)
                             .badge(item == .inbox ? model.inbox.count : 0)
                             .tag(item)
@@ -110,25 +116,34 @@ struct WalletTabsView: View {
                 } detail: {
                     // Grouped lists are designed for full pane width (cf.
                     // Settings on iPad) — no artificial column.
-                    view(for: section ?? .portfolio)
+                    view(for: section)
                 }
             } else {
-                TabView {
+                TabView(selection: $section) {
                     PortfolioView()
                         .tabItem { Label("Portfolio", systemImage: "creditcard") }
+                        .tag(WalletSection.portfolio)
                     InboxView()
                         .tabItem { Label("Inbox", systemImage: "tray") }
                         .badge(model.inbox.count)
+                        .tag(WalletSection.inbox)
                     SendView()
                         .tabItem { Label("Send", systemImage: "paperplane") }
+                        .tag(WalletSection.send)
                     ReceiveView()
                         .tabItem { Label("Receive", systemImage: "qrcode") }
+                        .tag(WalletSection.receive)
                     HistoryView()
                         .tabItem { Label("History", systemImage: "clock") }
+                        .tag(WalletSection.history)
                 }
             }
         }
         .task { await autoRefresh() }
+        // A checkout deep link routes straight to Send, where it's prefilled.
+        .onChange(of: model.pendingCheckoutUrl) { _, url in
+            if url != nil { section = .send }
+        }
     }
 
     @ViewBuilder
@@ -532,29 +547,51 @@ struct SendView: View {
             .sheet(isPresented: $showScanner) {
                 QRScannerSheet { handleScanned($0) }
             }
+            // A checkout deep link (`.onOpenURL`) prefills here once Send is shown.
+            .task(id: model.pendingCheckoutUrl) {
+                if let url = model.pendingCheckoutUrl {
+                    await prefill(from: url)
+                    model.clearPendingCheckout()
+                }
+            }
         }
     }
 
-    /// A raw scan: a `canton-checkout:` QR fetches and reviews the dApp order
-    /// and prefills the form; anything else is treated as a recipient party id.
     private func handleScanned(_ raw: String) {
-        let scanned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard scanned.hasPrefix("canton-checkout:") else {
-            receiver = scanned
+        Task { @MainActor in await prefill(from: raw) }
+    }
+
+    /// A raw scan or deep link: a `canton-checkout:` payload prefills the form —
+    /// inline fields from the hybrid `canton-checkout://pay?…` form (instant, no
+    /// fetch), or a fetch for the older pointer form. Anything else is a party id.
+    @MainActor
+    private func prefill(from raw: String) async {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.hasPrefix("canton-checkout:") else {
+            receiver = s
             checkoutNote = nil
             return
         }
-        let url = String(scanned.dropFirst("canton-checkout:".count))
-        Task { @MainActor in
-            if let info = await model.fetchCheckout(url) {
-                receiver = info.payTo
-                amount = info.amount
-                memo = info.memo
-                checkoutNote = [info.shop.isEmpty ? nil : info.shop, info.item]
-                    .compactMap { $0 }.joined(separator: " · ")
-            } else {
-                checkoutNote = "Couldn't load that checkout."
-            }
+        if let items = URLComponents(string: s)?.queryItems,
+           let to = items.first(where: { $0.name == "to" })?.value {
+            func value(_ name: String) -> String? { items.first(where: { $0.name == name })?.value }
+            receiver = to
+            amount = value("amount") ?? ""
+            memo = value("memo") ?? ""
+            let shop = value("shop")
+            checkoutNote = [(shop?.isEmpty == false) ? shop : nil, value("item")]
+                .compactMap { $0 }.joined(separator: " · ")
+            return
+        }
+        let url = String(s.dropFirst("canton-checkout:".count))
+        if let info = await model.fetchCheckout(url) {
+            receiver = info.payTo
+            amount = info.amount
+            memo = info.memo
+            checkoutNote = [info.shop.isEmpty ? nil : info.shop, info.item]
+                .compactMap { $0 }.joined(separator: " · ")
+        } else {
+            checkoutNote = "Couldn't load that checkout."
         }
     }
 }

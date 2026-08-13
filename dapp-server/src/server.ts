@@ -22,6 +22,13 @@ function rfc3339(date: Date): string {
   return date.toISOString().replace(/\.\d+Z$/, 'Z');
 }
 
+/** A compact item summary for the QR payload, capped so a big cart doesn't
+ *  bloat the QR — the page and the /checkout fetch carry the full list. */
+function itemSummary(lineItems: Array<{ quantity: number; name: string }>): string {
+  const parts = lineItems.map((li) => `${li.quantity}× ${li.name}`);
+  return parts.length <= 3 ? parts.join(' · ') : `${parts.slice(0, 2).join(' · ')} +${parts.length - 2} more`;
+}
+
 export function createApp(
   config: Config = loadConfig(),
   nonces = new NonceStore(config.nonceTtlSeconds),
@@ -127,7 +134,16 @@ export function createApp(
     });
     try {
       const { order, lineItems, total } = checkoutCart(items, config.merchantParty, orders);
-      const uri = checkoutUri(config.publicUrl, order.id);
+      const uri = checkoutUri({
+        publicUrl: config.publicUrl,
+        orderId: order.id,
+        payTo: order.payTo,
+        amount: order.amount,
+        instrument: order.instrumentId ?? 'Amulet',
+        memo: order.memo,
+        shop: config.shopName,
+        item: itemSummary(lineItems),
+      });
       const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
       res.status(201).json({
         order,

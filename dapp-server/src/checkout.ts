@@ -1,25 +1,54 @@
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
-// The order-fetch "session" flow. The checkout screen shows a QR that encodes
-// where to fetch the order; a wallet scans it, GETs the checkout, shows it for
-// review, and the customer pays. The web confirms by watching the ledger.
+// The scan-to-pay payload. The checkout screen shows a QR a wallet scans (in
+// app, or via the phone camera as a deep link) to review and pay.
 //
-// Canton has no payment-URI standard (checked the CIPs), so this is a small
-// convention: `canton-checkout:<url>`. The scheme only marks the QR as a
-// Canton checkout to review-and-pay; the URL is where the wallet reads it.
+// It's a HYBRID, self-describing payload: the display + send fields are inline,
+// so a wallet prefills instantly and offline — no fetch, no dependency on the
+// server being reachable, no scan-time ping to the merchant. An optional `url`
+// points at the order for a wallet that wants authoritative or live state.
+//
+// Canton has no payment-URI standard (the CIPs define none), so this is a small
+// convention of this reference, modelled on EIP-681.
 
 import type { Order } from './orders.ts';
 
-export const CHECKOUT_SCHEME = 'canton-checkout:';
+export const CHECKOUT_SCHEME = 'canton-checkout';
 
-/** The QR payload: the scheme marker followed by the URL the wallet fetches. */
-export function checkoutUri(publicUrl: string, orderId: string): string {
-  const base = publicUrl.replace(/\/+$/, '');
-  return `${CHECKOUT_SCHEME}${base}/checkout/${orderId}`;
+export interface CheckoutUriFields {
+  publicUrl: string;
+  orderId: string;
+  payTo: string;
+  amount: string;
+  instrument: string;
+  memo: string;
+  shop: string;
+  item: string;
 }
 
-/** What the wallet fetches and renders for review — the reproduced checkout. */
+/**
+ * The hybrid `canton-checkout://pay?…` payload. Values are percent-encoded with
+ * `encodeURIComponent` (spaces as %20, not +), which `Uri.getQueryParameter`
+ * (Android) and `URLComponents.queryItems` (iOS) both decode cleanly.
+ */
+export function checkoutUri(f: CheckoutUriFields): string {
+  const base = f.publicUrl.replace(/\/+$/, '');
+  const params: Array<[string, string]> = [
+    ['to', f.payTo],
+    ['amount', f.amount],
+    ['instrument', f.instrument],
+    ['memo', f.memo],
+    ['shop', f.shop],
+    ['item', f.item],
+    ['url', `${base}/checkout/${f.orderId}`],
+  ];
+  const query = params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  return `${CHECKOUT_SCHEME}://pay?${query}`;
+}
+
+/** What a wallet fetches via the payload's `url` — the authoritative order, for
+ *  a wallet that wants live state. The inline fields cover the common path. */
 export interface CheckoutView {
   orderId: string;
   shop: string;

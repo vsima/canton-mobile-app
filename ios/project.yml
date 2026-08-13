@@ -44,6 +44,11 @@ targets:
             localhost:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
+        # A canton-checkout: QR opens the wallet (Camera / any QR scanner).
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.vsima.canton.app.checkout
+            CFBundleURLSchemes:
+              - canton-checkout
     settings:
       base:
         # Unchanged from the single-app layout: the installed wallet keeps its
