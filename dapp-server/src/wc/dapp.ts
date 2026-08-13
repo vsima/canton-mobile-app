@@ -15,6 +15,8 @@ import { ALL_METHODS, CANTON_METHODS, CANTON_NAMESPACE, chainId } from './protoc
 import type {
   ConnectResult,
   DappAccount,
+  ExecutedResult,
+  PrepareSubmission,
   RequestTransferParams,
   SignMessageResult,
   TransferResult,
@@ -80,7 +82,19 @@ export class DappConnector {
     });
   }
 
-  /** Ask the wallet to approve and submit a transfer. */
+  /** Push prepared commands (a Token Standard transfer) to the wallet as a
+   *  CIP-0103 `prepareExecuteAndWait` — the standard one-tap payment. The wallet
+   *  prepares on its participant, verifies the prepared-tx hash, signs in its
+   *  enclave, and executes; this resolves with the executed transaction. */
+  async prepareExecuteAndWait(topic: string, submission: PrepareSubmission): Promise<ExecutedResult> {
+    return this.client.request<ExecutedResult>({
+      topic,
+      chainId: this.chain,
+      request: { method: CANTON_METHODS.prepareExecuteAndWait, params: submission },
+    });
+  }
+
+  /** Ask the wallet to approve and submit a transfer (non-standard convenience). */
   async requestTransfer(topic: string, params: RequestTransferParams): Promise<TransferResult> {
     return this.client.request<TransferResult>({
       topic,

@@ -34,6 +34,11 @@ export const CANTON_METHODS = {
   /** Sign a structured message (Sign-In with Canton). {@link SignMessageParams}
    *  → {@link SignMessageResult}. */
   signMessage: 'signMessage',
+  /** Submit prepared commands and wait for execution — the wallet prepares on
+   *  its participant, verifies the hash, signs in its enclave, and executes.
+   *  {@link PrepareSubmission} → {@link ExecutedResult}. This is the standard
+   *  Canton one-tap payment (a Token Standard transfer, pushed to the wallet). */
+  prepareExecuteAndWait: 'prepareExecuteAndWait',
   /** NON-STANDARD dApp-server convenience: ask the wallet to build and submit a
    *  transfer from high-level fields ({@link RequestTransferParams}) — the
    *  headless demo's payment. A native wallet does not implement this; it pays
@@ -120,6 +125,23 @@ export interface ConnectResult {
   isConnected: boolean;
   isNetworkConnected: boolean;
   reason?: string;
+}
+
+/** `prepareExecuteAndWait` params (OpenRPC `JsPrepareSubmissionRequest`). The
+ *  wallet supplies `actAs`'s synchronizer and signing; the dApp supplies the
+ *  commands and their disclosed contracts. */
+export interface PrepareSubmission {
+  /** JSON Ledger API commands (e.g. a Token Standard `ExerciseCommand`). */
+  commands: unknown[];
+  /** The party to act as — must be one the wallet granted this dApp. */
+  actAs: string[];
+  /** Disclosed contracts the commands reference (e.g. the registry factory). */
+  disclosedContracts?: unknown[];
+}
+
+/** `prepareExecuteAndWait` result — the executed transaction (`txChanged`). */
+export interface ExecutedResult {
+  tx: { commandId: string; status: string; payload?: { updateId?: string } };
 }
 
 /** One account `listAccounts` returns (OpenRPC `Wallet`). `publicKey` is the
