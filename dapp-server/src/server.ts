@@ -153,17 +153,23 @@ export function createApp(
     try {
       const dapp = await dappConnector(wc);
       const { beginWalletConnectSignIn } = await import('./wc/signin.ts');
-      const { uri, done } = await beginWalletConnectSignIn(dapp, {
-        domain: config.domain,
-        loginUri: config.uri,
-        networkId: config.networkId,
-        shopName: config.shopName,
-      });
       const id = randomUUID();
+      const tag = `[siwc-wc ${id.slice(0, 8)}]`;
+      const { uri, done } = await beginWalletConnectSignIn(
+        dapp,
+        { domain: config.domain, loginUri: config.uri, networkId: config.networkId, shopName: config.shopName },
+        (s) => console.log(`${tag} ${s}`),
+      );
       wcSignIns.set(id, { status: 'pending', startedAt: Date.now() });
       void done.then(
-        ({ party }) => wcSignIns.set(id, { status: 'signed-in', party, startedAt: Date.now() }),
-        (e: unknown) => wcSignIns.set(id, { status: 'failed', reason: (e as Error).message, startedAt: Date.now() }),
+        ({ party }) => {
+          console.log(`${tag} SIGNED IN ${party}`);
+          wcSignIns.set(id, { status: 'signed-in', party, startedAt: Date.now() });
+        },
+        (e: unknown) => {
+          console.log(`${tag} FAILED: ${(e as Error).message}`);
+          wcSignIns.set(id, { status: 'failed', reason: (e as Error).message, startedAt: Date.now() });
+        },
       );
       const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
       res.status(201).json({ id, uri, qrSvg });

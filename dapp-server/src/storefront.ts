@@ -299,6 +299,40 @@ function confetti() {
 
 // --- sign in with wallet (WalletConnect) -----------------------------------
 
+var signedInParty = null;
+
+function shortParty(p) {
+  var i = p.indexOf('::');
+  return i < 0 ? (p.length > 18 ? p.slice(0, 18) + '…' : p) : p.slice(0, i) + '::' + p.slice(i + 2, i + 8) + '…';
+}
+
+function renderSigninButton() {
+  var b = document.getElementById('signin');
+  if (!b) return;
+  if (signedInParty) {
+    b.textContent = '✓ ' + shortParty(signedInParty) + ' · Sign out';
+    b.title = signedInParty;
+    b.onclick = signOut;
+  } else {
+    b.textContent = '🔐 Sign in with your wallet';
+    b.title = '';
+    b.onclick = showSignIn;
+  }
+}
+
+function setSignedIn(party) {
+  signedInParty = party;
+  try { localStorage.setItem('siwc-party', party); } catch (e) {}
+  renderSigninButton();
+}
+
+function signOut() {
+  signedInParty = null;
+  try { localStorage.removeItem('siwc-party'); } catch (e) {}
+  renderSigninButton();
+  showCatalog();
+}
+
 function setSiStatus(text, spinning) {
   var s = document.getElementById('si-status'); if (!s) return;
   s.innerHTML = '';
@@ -337,6 +371,7 @@ function pollSignIn(id) {
 }
 
 function renderSignedIn(party) {
+  setSignedIn(party);
   var app = document.getElementById('app');
   app.innerHTML = '';
   var check = h('div', {});
@@ -359,8 +394,8 @@ function renderSignedIn(party) {
 document.title = CONFIG.shop;
 var sn = document.getElementById('shopname');
 if (sn) sn.textContent = '🛍️ ' + CONFIG.shop;
-var siBtn = document.getElementById('signin');
-if (siBtn) siBtn.onclick = showSignIn;
+try { signedInParty = localStorage.getItem('siwc-party'); } catch (e) {}
+renderSigninButton();
 fetch('/shop').then(function (r) { return r.json(); }).then(function (data) { PRODUCTS = data.products || []; showCatalog(); });
 </script>
 </body>

@@ -40,13 +40,18 @@ export interface SignInOutcome {
 export async function beginWalletConnectSignIn(
   dapp: DappConnector,
   fields: SignInFields,
+  log: (step: string) => void = () => {},
 ): Promise<{ uri: string; done: Promise<SignInOutcome> }> {
   const { uri, approved } = await dapp.createSession();
+  log('session opened; waiting for a wallet to pair');
   const done = (async (): Promise<SignInOutcome> => {
     const session = await approved;
+    log(`paired (topic ${session.topic.slice(0, 12)}…); requesting connect`);
     try {
       await dapp.connect(session.topic);
+      log('connect returned; requesting listAccounts');
       const accounts = await dapp.listAccounts(session.topic);
+      log(`listAccounts → ${accounts.length} account(s)`);
       const account = accounts[0];
       if (account === undefined) throw new Error('the wallet shared no accounts');
       const message = buildSignInMessage({
@@ -58,10 +63,13 @@ export async function beginWalletConnectSignIn(
         nonce: randomUUID().replace(/-/g, ''),
         issuedAt: new Date().toISOString(),
       });
+      log('requesting signMessage');
       const { signature } = await dapp.requestSignMessage(session.topic, message);
+      log('signMessage returned; verifying');
       if (!verifySignature(message, account.publicKey, Buffer.from(signature, 'hex'))) {
         throw new Error('the signature did not verify against the account key');
       }
+      log(`verified — signed in as ${account.partyId.slice(0, 24)}…`);
       return { party: account.partyId };
     } finally {
       await dapp.disconnect(session.topic).catch(() => {});
