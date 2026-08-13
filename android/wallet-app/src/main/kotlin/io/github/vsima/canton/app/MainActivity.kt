@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -71,6 +72,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -1264,9 +1266,19 @@ private fun ConnectScreen(model: WalletModel) {
 @Composable
 private fun WcApprovalSheet(model: WalletModel) {
     val approval = model.pendingApproval ?: return
-    ModalBottomSheet(onDismissRequest = { approval.resolve(DappApproval.Rejected("Dismissed")) }) {
+    // Skip the half-expanded state so the whole approval (amount, party, actions)
+    // is visible at once, and pad past the system navigation bar so the buttons
+    // clear the gesture bar.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = { approval.resolve(DappApproval.Rejected("Dismissed")) },
+        sheetState = sheetState,
+    ) {
         Column(
-            Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             when (val request = approval.request) {
