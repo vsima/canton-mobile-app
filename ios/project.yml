@@ -77,6 +77,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.vsima.canton.app
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"
+        # The App Group Reown's relay keychain needs (see Wallet.entitlements).
+        CODE_SIGN_ENTITLEMENTS: Wallet.entitlements
   CantonDapp:
     type: application
     platform: iOS
