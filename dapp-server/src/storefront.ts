@@ -409,7 +409,6 @@ function openSignInDialog() {
       var uriInput = h('input', { 'class': 'wcuri-input', type: 'text', readonly: 'readonly', value: data.uri });
       uriInput.onclick = function () { this.select(); };
       qrEl.appendChild(h('div', { 'class': 'wcuri' }, [uriInput, copyBtn(data.uri)]));
-      qrEl.appendChild(h('div', { 'class': 'cap', text: 'On a simulator? Copy this link and paste it into Connect.' }));
     }
     setSiStatus('Waiting for your wallet to connect and sign…', true);
     pollSignIn(data.id);
