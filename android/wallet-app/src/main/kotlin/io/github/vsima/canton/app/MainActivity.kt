@@ -3,6 +3,7 @@
 
 package io.github.vsima.canton.app
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Build
@@ -117,11 +118,37 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val autoAccept = intent.getBooleanExtra("autoAccept", false)
-        intent.getStringExtra("host")?.let { WalletEnvironment.hostBridge = it }
+        // The dev host override is sticky: a deep-link launch (from a camera)
+        // carries no extras, so persist the last host and restore it, keeping
+        // the wallet on the adb-reverse loopback for LocalNet.
+        val devPrefs = getSharedPreferences("devconfig", MODE_PRIVATE)
+        val host = intent.getStringExtra("host")
+        if (host != null) {
+            WalletEnvironment.hostBridge = host
+            devPrefs.edit().putString("hostBridge", host).apply()
+        } else {
+            devPrefs.getString("hostBridge", null)?.let { WalletEnvironment.hostBridge = it }
+        }
         setContent {
             WalletTheme {
                 WalletApp(model, autoAccept)
             }
+        }
+        handleDeepLink(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    /** A `canton-checkout:` VIEW intent (from a camera / QR scanner): hand the
+     *  checkout URL to the model; the Send screen fetches and prefills it. */
+    private fun handleDeepLink(intent: Intent?) {
+        val data = intent?.dataString ?: return
+        if (data.startsWith("canton-checkout:")) {
+            model.requestCheckout(data.removePrefix("canton-checkout:"))
         }
     }
 }
@@ -208,6 +235,11 @@ private fun CenteredMessage(title: String, body: String, spinner: Boolean, error
 @Composable
 private fun WalletTabs(model: WalletModel) {
     var section by remember { mutableStateOf(Section.Portfolio) }
+
+    // A checkout deep link routes straight to Send, where it's prefilled.
+    LaunchedEffect(model.pendingCheckoutUrl) {
+        if (model.pendingCheckoutUrl != null) section = Section.Send
+    }
 
     // NavigationSuiteScaffold adapts the navigation itself: bottom bar on
     // phones, navigation rail on tablets/foldables/landscape.
@@ -628,6 +660,30 @@ private fun SendScreen(model: WalletModel) {
     var checkoutNote by remember { mutableStateOf<String?>(null) }
     val scanScope = rememberCoroutineScope()
 
+    // Fetch a canton-checkout order and prefill the form for review — shared by
+    // the in-app scanner and by a deep link (VIEW intent) into the wallet.
+    val applyCheckout: (String) -> Unit = { url ->
+        scanScope.launch {
+            val info = model.fetchCheckout(url)
+            if (info != null) {
+                receiver = info.payTo
+                amount = info.amount
+                memo = info.memo
+                checkoutNote = listOfNotNull(info.shop.ifBlank { null }, info.item).joinToString(" · ")
+            } else {
+                checkoutNote = "Couldn't load that checkout."
+            }
+        }
+    }
+
+    // A checkout deep link, delivered by MainActivity, prefills here.
+    LaunchedEffect(model.pendingCheckoutUrl) {
+        model.pendingCheckoutUrl?.let { url ->
+            applyCheckout(url)
+            model.clearPendingCheckout()
+        }
+    }
+
     // Prewarm/refresh the cached fee config as the amount changes; the
     // estimate itself recomputes from cache — no network call per keystroke.
     LaunchedEffect(amount) { model.ensureFeePreviewFresh() }
@@ -671,20 +727,7 @@ private fun SendScreen(model: WalletModel) {
                                 val scanned = raw.trim()
                                 if (scanned.startsWith("canton-checkout:")) {
                                     // A dApp checkout QR: fetch it, review it, prefill the form.
-                                    val url = scanned.removePrefix("canton-checkout:")
-                                    scanScope.launch {
-                                        val info = model.fetchCheckout(url)
-                                        if (info != null) {
-                                            receiver = info.payTo
-                                            amount = info.amount
-                                            memo = info.memo
-                                            checkoutNote = listOfNotNull(
-                                                info.shop.ifBlank { null }, info.item,
-                                            ).joinToString(" · ")
-                                        } else {
-                                            checkoutNote = "Couldn't load that checkout."
-                                        }
-                                    }
+                                    applyCheckout(scanned.removePrefix("canton-checkout:"))
                                 } else {
                                     receiver = scanned
                                     checkoutNote = null

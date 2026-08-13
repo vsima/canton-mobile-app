@@ -187,6 +187,10 @@ class WalletModel(
     var hardwareSigner by mutableStateOf(false)
         private set
     var lastSend by mutableStateOf<SendReceipt?>(null)
+    /** A checkout URL delivered by a `canton-checkout:` deep link, awaiting the
+     *  Send screen to fetch and prefill it. */
+    var pendingCheckoutUrl by mutableStateOf<String?>(null)
+        private set
     var preapproval by mutableStateOf<ScanClient.TransferPreapprovalInfo?>(null)
         private set
     var preapprovalRequested by mutableStateOf(false)
@@ -238,6 +242,16 @@ class WalletModel(
     private var driver: SigningDriver? = null
     private var allocated: AllocatedExternalParty? = null
     private var synchronizerId: String? = null
+
+    /** Called from a `canton-checkout:` deep link (a VIEW intent): the Send
+     *  screen picks it up, fetches the order, and prefills for review. */
+    fun requestCheckout(url: String) {
+        pendingCheckoutUrl = url
+    }
+
+    fun clearPendingCheckout() {
+        pendingCheckoutUrl = null
+    }
 
     val totalAmulet: BigDecimal
         get() = holdings.fold(BigDecimal.ZERO) { total, holding -> total + holding.amount }
