@@ -8,11 +8,27 @@ import { checkoutUri, checkoutView, CHECKOUT_SCHEME } from '../src/checkout.ts';
 import { OrderBook } from '../src/orders.ts';
 import { checkoutCart } from '../src/shop.ts';
 
-test('checkoutUri marks the QR with the scheme and the fetch URL', () => {
-  assert.equal(checkoutUri('http://localhost:8088', 'abc'), 'canton-checkout:http://localhost:8088/checkout/abc');
-  // A trailing slash on the base does not double up.
-  assert.equal(checkoutUri('http://host:8088/', 'abc'), 'canton-checkout:http://host:8088/checkout/abc');
-  assert.ok(checkoutUri('http://x', 'y').startsWith(CHECKOUT_SCHEME));
+test('checkoutUri builds a self-describing canton-checkout://pay payload', () => {
+  const uri = checkoutUri({
+    publicUrl: 'http://host:8088/', // trailing slash
+    orderId: 'abc',
+    payTo: 'merchant::1220aa',
+    amount: '12',
+    instrument: 'Amulet',
+    memo: 'abc',
+    shop: 'Canton Corner',
+    item: '2× Coffee · 1× Stickers',
+  });
+  assert.ok(uri.startsWith(`${CHECKOUT_SCHEME}://pay?`));
+  // Parse it back the way the wallets do — decoded query params.
+  const params = new URL(uri).searchParams;
+  assert.equal(params.get('to'), 'merchant::1220aa');
+  assert.equal(params.get('amount'), '12');
+  assert.equal(params.get('instrument'), 'Amulet');
+  assert.equal(params.get('memo'), 'abc');
+  assert.equal(params.get('shop'), 'Canton Corner');
+  assert.equal(params.get('item'), '2× Coffee · 1× Stickers');
+  assert.equal(params.get('url'), 'http://host:8088/checkout/abc'); // trailing slash trimmed
 });
 
 test('checkoutView reproduces the order for the wallet to review', () => {

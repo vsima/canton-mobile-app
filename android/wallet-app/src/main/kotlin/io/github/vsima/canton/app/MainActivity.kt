@@ -148,7 +148,7 @@ class MainActivity : ComponentActivity() {
     private fun handleDeepLink(intent: Intent?) {
         val data = intent?.dataString ?: return
         if (data.startsWith("canton-checkout:")) {
-            model.requestCheckout(data.removePrefix("canton-checkout:"))
+            model.requestCheckout(data)
         }
     }
 }
@@ -660,18 +660,32 @@ private fun SendScreen(model: WalletModel) {
     var checkoutNote by remember { mutableStateOf<String?>(null) }
     val scanScope = rememberCoroutineScope()
 
-    // Fetch a canton-checkout order and prefill the form for review — shared by
-    // the in-app scanner and by a deep link (VIEW intent) into the wallet.
-    val applyCheckout: (String) -> Unit = { url ->
-        scanScope.launch {
-            val info = model.fetchCheckout(url)
-            if (info != null) {
-                receiver = info.payTo
-                amount = info.amount
-                memo = info.memo
-                checkoutNote = listOfNotNull(info.shop.ifBlank { null }, info.item).joinToString(" · ")
-            } else {
-                checkoutNote = "Couldn't load that checkout."
+    // Prefill from a canton-checkout payload — shared by the in-app scanner and
+    // a deep link. The hybrid `canton-checkout://pay?…` form carries the fields
+    // inline (prefill instantly, no fetch, no server ping); the older pointer
+    // form `canton-checkout:<url>` is fetched.
+    val applyCheckout: (String) -> Unit = { raw ->
+        val uri = android.net.Uri.parse(raw)
+        val inlineTo = uri.getQueryParameter("to")
+        if (inlineTo != null) {
+            receiver = inlineTo
+            amount = uri.getQueryParameter("amount") ?: ""
+            memo = uri.getQueryParameter("memo") ?: ""
+            checkoutNote = listOfNotNull(
+                uri.getQueryParameter("shop")?.ifBlank { null },
+                uri.getQueryParameter("item"),
+            ).joinToString(" · ")
+        } else {
+            scanScope.launch {
+                val info = model.fetchCheckout(raw.removePrefix("canton-checkout:"))
+                if (info != null) {
+                    receiver = info.payTo
+                    amount = info.amount
+                    memo = info.memo
+                    checkoutNote = listOfNotNull(info.shop.ifBlank { null }, info.item).joinToString(" · ")
+                } else {
+                    checkoutNote = "Couldn't load that checkout."
+                }
             }
         }
     }
@@ -737,8 +751,8 @@ private fun SendScreen(model: WalletModel) {
                             code.rawValue?.let { raw ->
                                 val scanned = raw.trim()
                                 if (scanned.startsWith("canton-checkout:")) {
-                                    // A dApp checkout QR: fetch it, review it, prefill the form.
-                                    applyCheckout(scanned.removePrefix("canton-checkout:"))
+                                    // A dApp checkout QR: prefill (inline) or fetch, then review.
+                                    applyCheckout(scanned)
                                 } else {
                                     receiver = scanned
                                     checkoutNote = null
