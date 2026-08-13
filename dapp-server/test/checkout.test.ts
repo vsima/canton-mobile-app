@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import { checkoutUri, checkoutView, CHECKOUT_SCHEME } from '../src/checkout.ts';
 import { OrderBook } from '../src/orders.ts';
-import { checkout } from '../src/shop.ts';
+import { checkoutCart } from '../src/shop.ts';
 
 test('checkoutUri marks the QR with the scheme and the fetch URL', () => {
   assert.equal(checkoutUri('http://localhost:8088', 'abc'), 'canton-checkout:http://localhost:8088/checkout/abc');
@@ -17,10 +17,10 @@ test('checkoutUri marks the QR with the scheme and the fetch URL', () => {
 
 test('checkoutView reproduces the order for the wallet to review', () => {
   const orders = new OrderBook();
-  const { order } = checkout('coffee', 'merchant::1220aa', orders);
+  const { order } = checkoutCart([{ productId: 'coffee', quantity: 1 }], 'merchant::1220aa', orders);
   const view = checkoutView(order, 'Canton Corner');
   assert.equal(view.shop, 'Canton Corner');
-  assert.equal(view.item, '☕ Coffee'); // the product description set at checkout
+  assert.equal(view.item, '1× Coffee'); // the item summary set at checkout
   assert.equal(view.amount, '5');
   assert.equal(view.instrumentId, 'Amulet');
   assert.equal(view.payTo, 'merchant::1220aa');

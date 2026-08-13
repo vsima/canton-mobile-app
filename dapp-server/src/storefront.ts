@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The storefront page — the dApp's frontend, served by its backend. Browse the
-// catalog, buy, and the page shows a checkout QR: scan it with a Canton wallet
-// to fetch and review the order, then pay. The page polls the order until the
-// ledger watcher settles it. Self-contained (no external assets).
+// catalog, build a cart, and check out: the checkout screen shows a QR to scan
+// with a Canton wallet beside a friendly order summary, and polls the order
+// until the ledger watcher settles it and celebrates. Self-contained.
 
 export interface StorefrontOptions {
   shop: string;
@@ -31,39 +31,62 @@ export function storefrontHtml(options: StorefrontOptions): string {
   @media (prefers-color-scheme: dark) { :root { --bg:#16181c; --card:#1f2227; --ink:#e8eaed; --muted:#9aa0a6; --line:#2c2f36; --accent:#7891ff; --ok:#5bd977; } }
   * { box-sizing: border-box; }
   body { margin:0; font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
-  header { padding:28px 20px 8px; text-align:center; }
+  header { padding:26px 20px 6px; text-align:center; }
   header h1 { margin:0; font-size:1.6rem; }
   header p { margin:4px 0 0; color:var(--muted); font-size:.9rem; }
-  main { max-width:760px; margin:0 auto; padding:20px; }
+  main { max-width:820px; margin:0 auto; padding:20px 20px 120px; }
+  h2 { margin:0 0 12px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:14px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; text-align:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; text-align:center; display:flex; flex-direction:column; align-items:center; gap:2px; }
   .card .emoji { font-size:2.4rem; }
   .card h3 { margin:8px 0 2px; font-size:1.05rem; }
   .card .price { color:var(--muted); font-size:.9rem; margin-bottom:12px; }
+  .card .control { margin-top:auto; }
   button { font:inherit; border:0; border-radius:10px; padding:10px 16px; background:var(--accent); color:#fff; cursor:pointer; }
-  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--line); padding:6px 10px; font-size:.8rem; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  button.ghost { background:transparent; color:var(--muted); border:0; padding:8px 10px; font-size:.85rem; }
   button:disabled { opacity:.5; cursor:default; }
-  .pay { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; }
-  .pay h2 { margin:0 0 4px; }
-  .qr { text-align:center; margin:14px 0; }
-  .qr svg { width:220px; height:220px; background:#fff; border-radius:12px; padding:10px; }
-  .muted { color:var(--muted); font-size:.8rem; margin-top:10px; }
-  .row { display:flex; align-items:center; gap:8px; margin:8px 0; }
-  .row .k { color:var(--muted); width:70px; flex:none; font-size:.85rem; }
-  .row .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; word-break:break-all; }
-  .status { margin-top:16px; padding:12px; border-radius:10px; background:rgba(59,91,219,.08); text-align:center; }
-  .status.paid { background:rgba(46,125,50,.12); color:var(--ok); font-weight:600; }
-  .success { text-align:center; padding:32px 22px; }
+  button.full { width:100%; }
+  .stepper { display:inline-flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:10px; padding:2px; }
+  .stepper .step { background:transparent; color:var(--ink); padding:4px 12px; font-size:1.1rem; border-radius:8px; }
+  .stepper .qty { min-width:26px; text-align:center; font-variant-numeric:tabular-nums; }
+  .cartbar { position:fixed; left:0; right:0; bottom:0; padding:14px 20px; background:var(--card); border-top:1px solid var(--line); display:flex; justify-content:center; }
+  .cartbar button { max-width:520px; width:100%; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .row-item { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .row-item:last-of-type { border-bottom:0; }
+  .row-item .name { flex:1; }
+  .row-item .name small { color:var(--muted); }
+  .row-item .sub { min-width:70px; text-align:right; font-variant-numeric:tabular-nums; }
+  .row-item .rm { background:transparent; color:var(--muted); border:0; padding:6px 8px; font-size:1.1rem; }
+  .totline { display:flex; justify-content:space-between; align-items:baseline; margin-top:14px; padding-top:14px; border-top:2px solid var(--line); font-size:1.2rem; font-weight:700; }
+  .totline .big { font-size:1.35rem; }
+  .checkout-cols { display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start; }
+  .checkout-cols > * { flex:1 1 260px; }
+  .qrbox { text-align:center; }
+  .qrbox svg { width:230px; height:230px; background:#fff; border-radius:12px; padding:10px; }
+  .qrbox .cap { color:var(--muted); font-size:.85rem; margin-top:8px; }
+  .li { display:flex; justify-content:space-between; gap:10px; padding:6px 0; }
+  .li .q { color:var(--muted); }
+  .manual { margin-top:18px; }
+  .manual summary { cursor:pointer; color:var(--muted); font-size:.9rem; }
+  .manual .kv { display:flex; align-items:center; gap:8px; margin:8px 0; }
+  .manual .kv .k { color:var(--muted); width:64px; flex:none; font-size:.85rem; }
+  .manual .kv .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; word-break:break-all; flex:1; }
+  .statusbar { display:flex; align-items:center; justify-content:center; gap:10px; padding:14px; border-radius:12px; background:rgba(59,91,219,.10); font-weight:600; margin-bottom:18px; }
+  .spinner { width:16px; height:16px; border:2px solid var(--accent); border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .note { background:var(--card); border:1px dashed var(--line); border-radius:12px; padding:16px; color:var(--muted); font-size:.9rem; }
+  .success { text-align:center; padding:28px 22px; }
   .checkmark { width:128px; height:128px; }
   .ck-circle { fill:none; stroke:var(--ok); stroke-width:3; stroke-dasharray:151; stroke-dashoffset:151; animation:ckdraw .5s cubic-bezier(.65,0,.45,1) forwards; }
   .ck-check { fill:none; stroke:var(--ok); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:40; stroke-dashoffset:40; animation:ckdraw .35s .5s cubic-bezier(.65,0,.45,1) forwards; }
   @keyframes ckdraw { to { stroke-dashoffset:0; } }
   .paid-title { font-size:2.4rem; margin:14px 0 4px; color:var(--ok); animation:pop .45s .35s both; }
-  .paid-sub { color:var(--muted); margin:0 0 20px; }
+  .paid-sub { color:var(--muted); margin:0 auto 18px; max-width:380px; }
   @keyframes pop { 0%{transform:scale(.5);opacity:0} 70%{transform:scale(1.08)} 100%{transform:scale(1);opacity:1} }
   .confetti { position:fixed; top:-14px; width:9px; height:15px; border-radius:2px; opacity:.9; pointer-events:none; z-index:50; animation-name:confall; animation-timing-function:linear; animation-fill-mode:forwards; }
   @keyframes confall { to { transform:translateY(110vh) rotate(720deg); } }
-  .note { background:var(--card); border:1px dashed var(--line); border-radius:12px; padding:16px; color:var(--muted); font-size:.9rem; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 </style>
 </head>
@@ -75,26 +98,45 @@ export function storefrontHtml(options: StorefrontOptions): string {
 <main id="app"><p>Loading…</p></main>
 <script>
 var CONFIG = ${config};
+var PRODUCTS = [];
+var cart = {};    // productId -> quantity
+var view = 'catalog';
 
 function h(tag, attrs, children) {
   var el = document.createElement(tag);
   if (attrs) for (var k in attrs) { if (k === 'text') el.textContent = attrs[k]; else el.setAttribute(k, attrs[k]); }
-  (children || []).forEach(function (c) { el.appendChild(c); });
+  (children || []).forEach(function (c) { if (c) el.appendChild(c); });
   return el;
 }
 function copyBtn(value) {
   var b = h('button', { 'class': 'secondary', text: 'Copy' });
+  b.style.padding = '6px 10px'; b.style.fontSize = '.8rem';
   b.onclick = function () { navigator.clipboard.writeText(value); b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1200); };
   return b;
 }
-function row(k, v, withCopy) {
-  var val = h('span', { 'class': 'v', text: v });
-  var kids = [h('span', { 'class': 'k', text: k }), val];
-  if (withCopy) kids.push(copyBtn(v));
-  return h('div', { 'class': 'row' }, kids);
+function fmtCc(n) { return (Math.round(n * 1e10) / 1e10).toString(); }
+function productById(id) { return PRODUCTS.filter(function (p) { return p.id === id; })[0]; }
+function cartCount() { var n = 0; for (var k in cart) n += cart[k]; return n; }
+function cartTotal() { var t = 0; for (var k in cart) { var p = productById(k); if (p) t += Number(p.priceCc) * cart[k]; } return t; }
+function cartIds() { return Object.keys(cart); }
+
+function setQty(id, qty) {
+  if (qty <= 0) delete cart[id]; else cart[id] = qty;
+  render();
+}
+function render() { view === 'cart' ? showCart() : showCatalog(); }
+
+// --- catalog ---------------------------------------------------------------
+
+function stepper(id) {
+  var qty = cart[id] || 0;
+  var minus = h('button', { 'class': 'step', text: '−' }); minus.onclick = function () { setQty(id, qty - 1); };
+  var plus = h('button', { 'class': 'step', text: '+' }); plus.onclick = function () { setQty(id, qty + 1); };
+  return h('div', { 'class': 'stepper' }, [minus, h('span', { 'class': 'qty', text: String(qty) }), plus]);
 }
 
-function renderCatalog(products) {
+function showCatalog() {
+  view = 'catalog';
   var app = document.getElementById('app');
   app.innerHTML = '';
   if (!CONFIG.merchantParty) {
@@ -103,73 +145,138 @@ function renderCatalog(products) {
     app.appendChild(note);
   }
   var grid = h('div', { 'class': 'grid' });
-  products.forEach(function (p) {
-    var buy = h('button', { text: 'Buy' });
-    buy.disabled = !CONFIG.merchantParty;
-    buy.onclick = function () { checkout(p.id); };
+  PRODUCTS.forEach(function (p) {
+    var control;
+    if ((cart[p.id] || 0) > 0) {
+      control = stepper(p.id);
+    } else {
+      control = h('button', { text: 'Add to cart' });
+      control.disabled = !CONFIG.merchantParty;
+      control.onclick = function () { setQty(p.id, 1); };
+    }
     grid.appendChild(h('div', { 'class': 'card' }, [
       h('div', { 'class': 'emoji', text: p.emoji }),
       h('h3', { text: p.name }),
       h('div', { 'class': 'price', text: p.priceCc + ' CC' }),
-      buy,
+      h('div', { 'class': 'control' }, [control]),
     ]));
   });
   app.appendChild(grid);
+  renderCartBar();
 }
 
-function checkout(productId) {
-  fetch('/shop/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ productId: productId }) })
+function renderCartBar() {
+  var existing = document.getElementById('cartbar');
+  if (existing) existing.remove();
+  if (cartCount() === 0) return;
+  var btn = h('button', {}, [
+    h('span', { text: '🛒 View cart · ' + cartCount() + (cartCount() === 1 ? ' item' : ' items') }),
+    h('span', { text: fmtCc(cartTotal()) + ' CC' }),
+  ]);
+  btn.onclick = showCart;
+  var bar = h('div', { 'class': 'cartbar', id: 'cartbar' }, [btn]);
+  document.body.appendChild(bar);
+}
+
+// --- cart ------------------------------------------------------------------
+
+function showCart() {
+  view = 'cart';
+  var cb = document.getElementById('cartbar'); if (cb) cb.remove();
+  var app = document.getElementById('app');
+  app.innerHTML = '';
+  if (cartCount() === 0) {
+    var back0 = h('button', { 'class': 'secondary', text: '← Continue shopping' }); back0.onclick = showCatalog;
+    app.appendChild(h('div', { 'class': 'panel' }, [h('h2', { text: 'Your cart' }), h('p', { 'class': 'paid-sub', text: 'Your cart is empty.' }), back0]));
+    return;
+  }
+  var rows = cartIds().map(function (id) {
+    var p = productById(id); var qty = cart[id];
+    var rm = h('button', { 'class': 'rm', text: '✕' }); rm.onclick = function () { setQty(id, 0); };
+    return h('div', { 'class': 'row-item' }, [
+      h('div', { text: p.emoji }),
+      h('div', { 'class': 'name' }, [h('div', { text: p.name }), h('small', { text: p.priceCc + ' CC each' })]),
+      stepper(id),
+      h('div', { 'class': 'sub', text: fmtCc(Number(p.priceCc) * qty) + ' CC' }),
+      rm,
+    ]);
+  });
+  var total = h('div', { 'class': 'totline' }, [h('span', { text: 'Total' }), h('span', { 'class': 'big', text: fmtCc(cartTotal()) + ' CC' })]);
+  var pay = h('button', { 'class': 'full', text: 'Checkout · ' + fmtCc(cartTotal()) + ' CC' }); pay.onclick = doCheckout;
+  var back = h('button', { 'class': 'ghost full', text: '← Continue shopping' }); back.onclick = showCatalog;
+  app.appendChild(h('div', { 'class': 'panel' }, [h('h2', { text: 'Your cart' })].concat(rows).concat([total, h('div', { style: 'margin-top:16px' }, [pay, back])])));
+}
+
+function doCheckout() {
+  var items = cartIds().map(function (id) { return { productId: id, quantity: cart[id] }; });
+  if (items.length === 0) return;
+  fetch('/shop/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items }) })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.error) { alert(data.error); return; }
-      renderPay(data.product, data.order, data.payment, data.checkout);
+      showCheckout(data);
       poll(data.order.id);
     });
 }
 
-function renderPay(product, order, payment, checkout) {
+// --- checkout --------------------------------------------------------------
+
+function summaryPanel(lineItems, total) {
+  var lines = (lineItems || []).map(function (li) {
+    return h('div', { 'class': 'li' }, [
+      h('span', {}, [h('span', { 'class': 'q', text: li.quantity + '× ' }), h('span', { text: li.emoji + ' ' + li.name })]),
+      h('span', { text: li.subtotal + ' CC' }),
+    ]);
+  });
+  return h('div', { 'class': 'panel' }, [h('h2', { text: 'Order summary' })].concat(lines).concat([
+    h('div', { 'class': 'totline' }, [h('span', { text: 'Total' }), h('span', { 'class': 'big', text: total + ' CC' })]),
+  ]));
+}
+
+function manualPanel(payment) {
+  function kv(k, v) { return h('div', { 'class': 'kv' }, [h('span', { 'class': 'k', text: k }), h('span', { 'class': 'v', text: v }), copyBtn(v)]); }
+  var d = document.createElement('details');
+  d.className = 'manual panel';
+  var s = document.createElement('summary'); s.textContent = 'Prefer to pay manually? Show payment details';
+  d.appendChild(s);
+  d.appendChild(kv('Amount', payment.amount + ' CC'));
+  d.appendChild(kv('To', payment.payTo));
+  d.appendChild(kv('Memo', payment.memo));
+  return d;
+}
+
+function showCheckout(data) {
   var app = document.getElementById('app');
   app.innerHTML = '';
-  var back = h('button', { 'class': 'secondary', text: '← back to shop' });
-  back.onclick = load;
-  var status = h('div', { 'class': 'status', id: 'status', text: 'Waiting for payment…' });
-  var qr = h('div', { 'class': 'qr' });
-  qr.innerHTML = checkout.qrSvg; // our own SVG for our own URL — safe to inline
-  app.appendChild(h('div', { 'class': 'pay' }, [
-    h('h2', { text: product.emoji + '  ' + product.name }),
-    h('p', { text: 'Scan with your Canton wallet to review and pay. The shop settles the moment the payment lands on the ledger.' }),
-    qr,
-    h('div', { 'class': 'muted', text: 'or pay manually:' }),
-    row('Amount', payment.amount + ' CC', true),
-    row('To', payment.payTo, true),
-    row('Memo', payment.memo, true),
-    status,
-    h('div', { 'class': 'row' }, [back]),
-  ]));
+  var status = h('div', { 'class': 'statusbar', id: 'status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Waiting for payment…' })]);
+  var qr = h('div', { 'class': 'qrbox' });
+  qr.innerHTML = data.checkout.qrSvg + '<div class="cap">Scan with your Canton wallet to review &amp; pay</div>';
+  var cols = h('div', { 'class': 'checkout-cols' }, [qr, summaryPanel(data.lineItems, data.total)]);
+  var back = h('button', { 'class': 'ghost', text: '← back to cart' }); back.onclick = showCart;
+  app.appendChild(h('div', {}, [status, cols, manualPanel(data.payment), h('div', { style: 'margin-top:14px' }, [back])]));
 }
 
 function poll(orderId) {
   var timer = setInterval(function () {
     fetch('/orders/' + orderId).then(function (r) { return r.json(); }).then(function (data) {
-      if (data.order && data.order.status === 'settled') {
-        clearInterval(timer);
-        renderPaid(data.order);
-      }
+      if (data.order && data.order.status === 'settled') { clearInterval(timer); renderPaid(data.order); }
     }).catch(function () {});
   }, 2500);
 }
 
+// --- paid ------------------------------------------------------------------
+
 function renderPaid(order) {
+  cart = {}; // order placed — empty the cart
   var app = document.getElementById('app');
   app.innerHTML = '';
   var check = h('div', {});
   check.innerHTML = '<svg viewBox="0 0 52 52" class="checkmark"><circle class="ck-circle" cx="26" cy="26" r="24"/><path class="ck-check" d="M14 27l7 7 16-16"/></svg>';
-  var more = h('button', { text: 'Back to shop' });
-  more.onclick = load;
+  var more = h('button', { text: 'Back to shop' }); more.onclick = showCatalog;
   app.appendChild(h('div', { 'class': 'success' }, [
     check,
     h('h2', { 'class': 'paid-title', text: 'Paid!' }),
-    h('p', { 'class': 'paid-sub', text: (order.description ? order.description + ' — ' : '') + order.amount + ' CC settled on-ledger.' }),
+    h('p', { 'class': 'paid-sub', text: (order.description ? order.description + ' — ' : '') + order.amount + ' CC settled on-ledger. Thank you!' }),
     more,
   ]));
   confetti();
@@ -189,14 +296,12 @@ function confetti() {
   }
 }
 
-function load() {
-  fetch('/shop').then(function (r) { return r.json(); }).then(function (data) { renderCatalog(data.products || []); });
-}
+// --- boot ------------------------------------------------------------------
 
 document.title = CONFIG.shop;
 var sn = document.getElementById('shopname');
 if (sn) sn.textContent = '🛍️ ' + CONFIG.shop;
-load();
+fetch('/shop').then(function (r) { return r.json(); }).then(function (data) { PRODUCTS = data.products || []; showCatalog(); });
 </script>
 </body>
 </html>

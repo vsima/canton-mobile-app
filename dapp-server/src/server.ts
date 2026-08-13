@@ -13,7 +13,7 @@ import { NonceStore } from './nonceStore.ts';
 import { buildSignInMessage, verifySignIn } from './siwc.ts';
 import QRCode from 'qrcode';
 import { OrderBook } from './orders.ts';
-import { CATALOG, checkout } from './shop.ts';
+import { CATALOG, checkoutCart, type CartItem } from './shop.ts';
 import { checkoutUri, checkoutView } from './checkout.ts';
 import { storefrontHtml } from './storefront.ts';
 
@@ -109,25 +109,30 @@ export function createApp(
     res.json({ products: CATALOG });
   });
 
-  // Buy a product: creates a payable order priced in Canton Coin, to the
-  // merchant party, referenced by the order id in its memo. Returns a checkout
-  // QR the wallet scans to fetch and review the order.
+  // Check out a cart: creates one payable order priced at the summed total, to
+  // the merchant party, referenced by the order id in its memo. Returns the
+  // line items, total, and a checkout QR the wallet scans to fetch and review.
   app.post('/shop/checkout', async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const productId = body['productId'];
-    if (typeof productId !== 'string') {
-      return res.status(400).json({ error: 'productId (string) is required' });
+    const rawItems = body['items'];
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return res.status(400).json({ error: 'items (non-empty array of { productId, quantity }) is required' });
     }
     if (config.merchantParty === undefined) {
       return res.status(409).json({ error: 'no merchant party configured — set MERCHANT_PARTY' });
     }
+    const items: CartItem[] = rawItems.map((it) => {
+      const o = (it ?? {}) as Record<string, unknown>;
+      return { productId: String(o['productId'] ?? ''), quantity: Number(o['quantity'] ?? 0) };
+    });
     try {
-      const { product, order } = checkout(productId, config.merchantParty, orders);
+      const { order, lineItems, total } = checkoutCart(items, config.merchantParty, orders);
       const uri = checkoutUri(config.publicUrl, order.id);
       const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
       res.status(201).json({
-        product,
         order,
+        lineItems,
+        total,
         payment: { payTo: order.payTo, amount: order.amount, instrumentId: order.instrumentId ?? null, memo: order.memo },
         checkout: { uri, qrSvg },
       });

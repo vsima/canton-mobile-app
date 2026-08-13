@@ -6,7 +6,7 @@
 // the flow — browse, check out, pay, settle — not the catalog, so the catalog
 // is hardcoded.
 
-import type { OrderBook, Order } from './orders.ts';
+import { scaledAmount, unscaledAmount, type OrderBook, type Order } from './orders.ts';
 
 export interface Product {
   id: string;
@@ -30,24 +30,59 @@ export function findProduct(id: string): Product | undefined {
   return CATALOG.find((p) => p.id === id);
 }
 
-export interface CheckoutResult {
-  product: Product;
+export interface CartItem {
+  productId: string;
+  quantity: number;
+}
+
+export interface LineItem {
+  id: string;
+  name: string;
+  emoji: string;
+  priceCc: string;
+  quantity: number;
+  subtotal: string;
+}
+
+export interface CartCheckout {
   order: Order;
+  lineItems: LineItem[];
+  total: string;
 }
 
 /**
- * Turns a product into a pending order the customer can pay: priced in Canton
- * Coin, payable to the merchant party, referenced by the order id in its memo.
- * Throws on an unknown product.
+ * Turns a cart into a single pending order the customer can pay: priced in
+ * Canton Coin at the summed total, payable to the merchant party, referenced by
+ * the order id in its memo. The order's description is the item summary the
+ * wallet shows on review. Throws on an empty cart or an unknown product.
  */
-export function checkout(productId: string, merchantParty: string, orders: OrderBook): CheckoutResult {
-  const product = findProduct(productId);
-  if (product === undefined) throw new Error(`no such product: ${productId}`);
+export function checkoutCart(items: CartItem[], merchantParty: string, orders: OrderBook): CartCheckout {
+  if (items.length === 0) throw new Error('cart is empty');
+  const lineItems: LineItem[] = [];
+  let totalScaled = 0n;
+  for (const { productId, quantity } of items) {
+    const product = findProduct(productId);
+    if (product === undefined) throw new Error(`no such product: ${productId}`);
+    const qty = Math.floor(quantity);
+    if (!Number.isFinite(qty) || qty < 1) throw new Error(`invalid quantity for ${productId}: ${quantity}`);
+    const subtotalScaled = scaledAmount(product.priceCc) * BigInt(qty);
+    totalScaled += subtotalScaled;
+    lineItems.push({
+      id: product.id,
+      name: product.name,
+      emoji: product.emoji,
+      priceCc: product.priceCc,
+      quantity: qty,
+      subtotal: unscaledAmount(subtotalScaled),
+    });
+  }
+  const total = unscaledAmount(totalScaled);
+  const description = lineItems.map((li) => `${li.quantity}× ${li.name}`).join(' · ');
   const order = orders.create({
     payTo: merchantParty,
-    amount: product.priceCc,
+    amount: total,
     instrumentId: INSTRUMENT_ID,
-    description: `${product.emoji} ${product.name}`,
+    description,
   });
-  return { product, order };
+  return { order, lineItems, total };
 }
