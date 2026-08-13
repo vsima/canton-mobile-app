@@ -26,7 +26,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -46,6 +46,17 @@ dependencies {
     // version only matters for a standalone build against Maven Central.
     implementation("io.github.vsima.canton:canton-wallet-sdk:0.6.0-SNAPSHOT")
     implementation("io.github.vsima.canton:canton-wallet-android:0.6.0-SNAPSHOT")
+    // The CIP-0103 provider engine, and the WalletConnect transport adapter
+    // (which brings canton-dapp transitively) — the wallet answers a dApp over
+    // a WalletConnect session through these.
+    implementation("io.github.vsima.canton:canton-dapp-wallet:0.6.0-SNAPSHOT")
+    implementation("io.github.vsima.canton:canton-dapp-wc:0.6.0-SNAPSHOT")
+    // Reown WalletKit — the WalletConnect client (relay, pairing, sessions).
+    // Pinned to 1.6.13 (the last of the 1.6 line): walletkit 1.7.0 pulls
+    // androidx.core 1.19.0, which requires compileSdk 37 + AGP 9.1; 1.6.13
+    // stays within this project's compileSdk 36 / AGP 8.13.
+    implementation("com.reown:android-core:1.6.13")
+    implementation("com.reown:walletkit:1.6.13")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // The app builds its own channel + vhost-aware HTTP client.
     implementation("io.grpc:grpc-okhttp:1.83.1")

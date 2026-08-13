@@ -8,6 +8,7 @@
          restored backup could never be decrypted anyway — and wallet state
          does not belong in a cloud backup to begin with. -->
     <application
+        android:name=".WalletApplication"
         android:label="Canton Wallet"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"

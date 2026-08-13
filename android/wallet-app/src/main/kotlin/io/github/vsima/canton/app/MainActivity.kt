@@ -95,6 +95,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.vsima.canton.wallet.Holding
 import io.github.vsima.canton.wallet.TokenStandardClient
 import io.github.vsima.canton.wallet.TransferDirection
+import io.github.vsima.canton.dapp.wallet.DappApproval
+import io.github.vsima.canton.dapp.wallet.DappApprovalRequest
+import androidx.compose.material.icons.outlined.Link
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import androidx.compose.material3.AlertDialog
@@ -170,6 +173,7 @@ private enum class Section(val label: String, val icon: ImageVector) {
     Send("Send", Icons.AutoMirrored.Outlined.Send),
     Receive("Receive", Icons.Outlined.QrCode),
     History("History", Icons.Outlined.History),
+    Connect("Connect", Icons.Outlined.Link),
 }
 
 @Composable
@@ -273,10 +277,14 @@ private fun WalletTabs(model: WalletModel) {
                     Section.Send -> SendScreen(model)
                     Section.Receive -> ReceiveScreen(model)
                     Section.History -> HistoryScreen(model)
+                    Section.Connect -> ConnectScreen(model)
                 }
             }
         }
     }
+    // A WalletConnect request can arrive on any tab, so the approval sheet is
+    // rendered globally, above the tabs.
+    WcApprovalSheet(model)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1118,3 +1126,135 @@ private fun qrBitmap(text: String): Bitmap? = try {
  *  digits — matching the iOS formatter so both apps read the same. */
 private val ccFormat = java.text.DecimalFormat("0.0###")
 private fun java.math.BigDecimal.cc(): String = ccFormat.format(this)
+
+/**
+ * Connect a dApp over WalletConnect: scan or paste a `wc:` link. The wallet
+ * pairs, then the dApp's connect and each signature surface as approval sheets
+ * ([WcApprovalSheet]) — the key never leaves the device.
+ */
+@Composable
+private fun ConnectScreen(model: WalletModel) {
+    var uri by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Connect a dApp", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Scan or paste a WalletConnect link (wc:…) shown by a dApp. You approve " +
+                "sharing your account and approve each signature — the key never leaves this device.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            value = uri,
+            onValueChange = { uri = it },
+            label = { Text("WalletConnect URI (wc:…)") },
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
+            trailingIcon = {
+                IconButton(onClick = {
+                    val options = GmsBarcodeScannerOptions.Builder()
+                        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                        .build()
+                    GmsBarcodeScanning.getClient(context, options).startScan()
+                        .addOnSuccessListener { code -> code.rawValue?.let { uri = it.trim() } }
+                        .addOnFailureListener { Log.i("WALLET", "wc scan failed: $it") }
+                }) { Icon(Icons.Outlined.QrCodeScanner, contentDescription = "Scan WalletConnect QR") }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = {
+                model.pairWalletConnect(uri)
+                uri = ""
+            },
+            enabled = uri.trim().startsWith("wc:"),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Connect") }
+        model.wcStatus?.let { status ->
+            Text(
+                status,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The approval sheet the engine raises for a WalletConnect request: sharing an
+ * account (connect) or signing a message. Approve/Reject answers the suspended
+ * [DappApprovalDelegate] in [WalletModel]; dismissing rejects.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WcApprovalSheet(model: WalletModel) {
+    val approval = model.pendingApproval ?: return
+    ModalBottomSheet(onDismissRequest = { approval.resolve(DappApproval.Rejected("Dismissed")) }) {
+        Column(
+            Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            when (val request = approval.request) {
+                is DappApprovalRequest.Connection -> {
+                    Text("Connect", style = MaterialTheme.typography.titleLarge)
+                    Text("“${request.peer.name}” wants to connect and see your Canton account.")
+                    SectionHeader("Account")
+                    SelectionContainer {
+                        Text(
+                            request.available.firstOrNull()?.partyId ?: "—",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    WcApprovalButtons(
+                        approveLabel = "Connect",
+                        onApprove = { approval.resolve(DappApproval.Approved(request.available)) },
+                        onReject = { approval.resolve(DappApproval.Rejected("Declined")) },
+                    )
+                }
+                is DappApprovalRequest.Message -> {
+                    Text("Sign in", style = MaterialTheme.typography.titleLarge)
+                    Text("“${request.peer.name}” asks you to sign a message with your Canton account.")
+                    SectionHeader("Message")
+                    SelectionContainer {
+                        Text(request.message, style = MaterialTheme.typography.bodySmall)
+                    }
+                    WcApprovalButtons(
+                        approveLabel = "Sign",
+                        onApprove = { approval.resolve(DappApproval.Approved()) },
+                        onReject = { approval.resolve(DappApproval.Rejected("Declined")) },
+                    )
+                }
+                is DappApprovalRequest.Transaction -> {
+                    Text("Approve transaction", style = MaterialTheme.typography.titleLarge)
+                    Text("“${request.peer.name}” asks you to approve a transaction with ${request.actAs.partyId.take(24)}….")
+                    WcApprovalButtons(
+                        approveLabel = "Approve",
+                        onApprove = { approval.resolve(DappApproval.Approved()) },
+                        onReject = { approval.resolve(DappApproval.Rejected("Declined")) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WcApprovalButtons(approveLabel: String, onApprove: () -> Unit, onReject: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedButton(
+            onClick = onReject,
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) { Text("Reject") }
+        Button(onClick = onApprove, modifier = Modifier.weight(1f)) { Text(approveLabel) }
+    }
+}

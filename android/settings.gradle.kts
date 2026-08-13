@@ -15,6 +15,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Reown WalletKit resolves its native (uniffi/yttrium) bindings via JitPack.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 

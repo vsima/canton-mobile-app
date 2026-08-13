@@ -32,6 +32,22 @@ import io.github.vsima.canton.wallet.ValidatorClient
 import io.github.vsima.canton.wallet.ValidatorException
 import io.github.vsima.canton.wallet.latestUsable
 import io.github.vsima.canton.wallet.android.AndroidKeystoreSigningDriver
+import io.github.vsima.canton.dapp.DappErrorCode
+import io.github.vsima.canton.dapp.DappException
+import io.github.vsima.canton.dapp.DappSignMessage
+import io.github.vsima.canton.dapp.DappWallet
+import io.github.vsima.canton.dapp.DappWalletStatus
+import io.github.vsima.canton.dapp.wallet.DappAccountsSource
+import io.github.vsima.canton.dapp.wallet.DappApproval
+import io.github.vsima.canton.dapp.wallet.DappApprovalDelegate
+import io.github.vsima.canton.dapp.wallet.DappApprovalRequest
+import io.github.vsima.canton.dapp.wallet.DappMessageSigner
+import io.github.vsima.canton.dapp.wallet.DappNetworkConfig
+import io.github.vsima.canton.dapp.wallet.DappPeer
+import io.github.vsima.canton.dapp.wallet.DappSession
+import io.github.vsima.canton.dapp.wc.CantonWalletConnect
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withContext
 import io.grpc.CallOptions
 import io.grpc.Channel
 import io.grpc.ClientCall
@@ -187,6 +203,21 @@ class WalletModel(
     var hardwareSigner by mutableStateOf(false)
         private set
     var lastSend by mutableStateOf<SendReceipt?>(null)
+
+    /** A WalletConnect request the engine has surfaced for the user to approve —
+     *  the CIP-0103 approval request plus a [resolve] to answer it. Non-null
+     *  drives the approval sheet; the sheet calls [WcApproval.resolve]. */
+    data class WcApproval(
+        val request: DappApprovalRequest,
+        val resolve: (DappApproval) -> Unit,
+    )
+
+    var pendingApproval by mutableStateOf<WcApproval?>(null)
+        private set
+
+    /** Last WalletConnect status line, shown on the Connect screen. */
+    var wcStatus by mutableStateOf<String?>(null)
+        private set
     /** A checkout URL delivered by a `canton-checkout:` deep link, awaiting the
      *  Send screen to fetch and prefill it. */
     var pendingCheckoutUrl by mutableStateOf<String?>(null)
@@ -362,6 +393,7 @@ class WalletModel(
     suspend fun refresh() {
         val authed = authedChannel ?: return
         val party = partyId ?: return
+        enableDappConnect()
         try {
             val tokens = tokens(authed)
             holdings = tokens.listHoldings(party)
@@ -747,9 +779,90 @@ class WalletModel(
             TransferRegistryClient(WalletEnvironment.registryUrl, WalletEnvironment.http),
         )
 
+    // ── WalletConnect (CIP-0103 over a WalletConnect session) ──────────────
+    //
+    // The wallet answers a dApp over WalletConnect through the SDK: the
+    // provider engine (DappSession) does approvals + signing, and the
+    // canton-dapp-wc adapter carries CIP-0103 frames. This model supplies the
+    // engine's three collaborators — the account it can share, the approval UI
+    // (a suspending handoff to `pendingApproval`), and the message signer (the
+    // TEE driver over the domain-separated bytes). The Reown client that moves
+    // the frames lives in WalletConnectController; nothing here touches it.
+
+    private var cantonWc: CantonWalletConnect? = null
+
+    /** The engine's approval delegate: suspends, surfacing the request as
+     *  [pendingApproval] until the sheet answers it. */
+    private val approver = DappApprovalDelegate { request ->
+        val decision = CompletableDeferred<DappApproval>()
+        withContext(kotlinx.coroutines.Dispatchers.Main) {
+            pendingApproval = WcApproval(request) { answer ->
+                pendingApproval = null
+                decision.complete(answer)
+            }
+        }
+        decision.await()
+    }
+
+    /** Signs a CIP-0103 message: the TEE driver over the domain-separated
+     *  bytes, returned hex — verifiable by any DappSignMessage verifier. */
+    private val messageSigner = DappMessageSigner { _, message ->
+        val d = driver ?: throw DappException(DappErrorCode.INTERNAL, "no signing key")
+        d.sign(DappSignMessage.signingBytes(message)).signature.toByteArray().toHex()
+    }
+
+    /** This wallet's single account, as the CIP-0103 projection a dApp sees. */
+    private suspend fun dappAccounts(): List<DappWallet> {
+        val party = partyId ?: return emptyList()
+        val d = driver ?: return emptyList()
+        val publicKeyHex = d.publicKey().keyData.toByteArray().toHex()
+        return listOf(
+            DappWallet(
+                primary = true,
+                partyId = party,
+                status = DappWalletStatus.ALLOCATED,
+                hint = party.substringBefore("::"),
+                publicKey = publicKeyHex,
+                namespace = party.substringAfterLast("::"),
+                networkId = DAPP_NETWORK_ID,
+                signingProviderId = "android-keystore",
+            ),
+        )
+    }
+
+    /** Builds the provider engine + WalletConnect adapter once the wallet is
+     *  ready, and registers them with the Reown binding. Idempotent. */
+    fun enableDappConnect() {
+        if (cantonWc != null || partyId == null || driver == null) return
+        val session = DappSession(
+            peer = DappPeer(id = "walletconnect", name = "dApp (WalletConnect)"),
+            accounts = DappAccountsSource { dappAccounts() },
+            approver = approver,
+            network = DappNetworkConfig(networkId = DAPP_NETWORK_ID),
+            messageSigner = messageSigner,
+        )
+        val adapter = CantonWalletConnect(session, DAPP_NETWORK_ID)
+        cantonWc = adapter
+        WalletConnectController.onStatus = { line -> scope.launch { wcStatus = line } }
+        WalletConnectController.register(adapter, accounts = { dappAccounts() })
+        Log.i("WALLET", "WalletConnect enabled for ${partyId?.take(24)}…")
+    }
+
+    /** Hands a scanned/pasted `wc:` pairing URI to the Reown client. */
+    fun pairWalletConnect(uri: String) {
+        wcStatus = "Pairing…"
+        WalletConnectController.pair(uri.trim())
+    }
+
+    private fun ByteArray.toHex(): String =
+        joinToString("") { byte -> "%02x".format(byte.toInt() and 0xFF) }
+
     companion object {
         /** Android Keystore alias holding this wallet's signing key. */
         const val KEY_ALIAS = "wallet"
+
+        /** CAIP-2 network id advertised over WalletConnect / CIP-0103. */
+        const val DAPP_NETWORK_ID = "canton:localnet"
 
         /** Convention key for human-readable transfer memos. */
         const val MEMO_KEY = "splice.lfdecentralizedtrust.org/reason"
