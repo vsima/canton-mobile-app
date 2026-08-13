@@ -4,188 +4,216 @@
 [![ios](https://github.com/vsima/canton-mobile-app/actions/workflows/ios.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/ios.yml)
 [![dapp-server](https://github.com/vsima/canton-mobile-app/actions/workflows/dapp-server.yml/badge.svg)](https://github.com/vsima/canton-mobile-app/actions/workflows/dapp-server.yml)
 
-Reference apps for the Canton Network — iOS (SwiftUI) and Android (Jetpack
-Compose / Material 3) — built on
-[canton-mobile-sdk](https://github.com/vsima/canton-mobile-sdk). They exist
-to prove the native stack end-to-end with stock platform components:
-everything the apps do goes through the SDK's public API.
+**What.** Reference apps that show the [Canton mobile SDKs](https://github.com/vsima/canton-mobile-sdk)
+in use, end to end, with stock platform components: an iOS (SwiftUI) and
+Android (Jetpack Compose / Material 3) wallet, a Node/TypeScript dApp shop, and
+a minimal dApp client.
 
-**Two references, the two ends of CIP-0103:**
+**Why.** To show an integrator what real apps built on the SDKs look like, and
+to keep the SDKs honest. **Everything here goes through the SDKs' public APIs** —
+nothing reaches around them — and every flow is exercised on CI and
+live-verified against a Splice LocalNet. If a capability works here, it works
+through the API you'd use.
 
-- **The wallet** (`android/wallet-app`, iOS `CantonWallet`) — links the wallet
-  SDK stack: signing drivers, party onboarding, the token standard.
-- **The dApp** (`android/dapp-app`, iOS `CantonDapp`) — a CIP-0103 client that
-  links **only** `canton-dapp` (+ the LAN transport). It has no way to reach a
-  signing driver or the Ledger API stubs, and the R8 release / simulator
-  builds succeeding from that dependency set alone is the demonstration that
-  the SDK's module split holds. This is where the ping, sign-in, and merchant
-  examples land as they come online.
+**Who.** Developers evaluating or integrating the Canton mobile SDKs — the
+native [`canton-mobile-sdk`](https://github.com/vsima/canton-mobile-sdk)
+(Swift + Kotlin) and the official `@canton-network` JavaScript SDKs.
 
-The dApp app is newer than the wallet — the cross-app transport, ping, and
-sign-in flows are landing incrementally; see the SDK's dApp-connectivity work.
+## The three references
 
-## Architecture — how a dApp reaches a wallet
+- **The wallet** — `android/wallet-app`, iOS `CantonWallet`. A self-custody
+  wallet on the **native SDK**: device-held keys, external-party onboarding,
+  the CIP-0056 token standard, and scan-to-pay. What a wallet built on the SDK
+  looks like.
+- **The dApp shop** — [`dapp-server/`](dapp-server/README.md). A Node/TS backend
+  on the **official `@canton-network` JS SDKs**: a storefront that takes a
+  payment and settles it on the ledger. The other side — a real dApp your wallet
+  pays, built on the ecosystem's own code.
+- **The dApp app** — `android/dapp-app`, iOS `CantonDapp`. A CIP-0103 client that
+  links **only** `canton-dapp`. It has no import path to a signing driver or the
+  Ledger API; its build succeeding from that dependency set alone is the SDK's
+  module split, enforced on every CI run.
 
-The dApp and the wallet are **separate apps**, and both are **clients**: a
-phone is an excellent outbound client and a poor server, so neither app
-listens on a socket. A real dApp is a service on the public internet, and
-that is where the CIP-0103 connection point belongs — not on a phone. The
-reference is built around that shape:
+## How it fits together
+
+The shop and the wallet are separate apps that never connect directly — **the
+ledger is the link.** To buy something:
+
+1. build a cart in the shop and check out;
+2. **scan the checkout QR** with the wallet — the phone's camera opens it (a
+   `canton-checkout:` deep link), or use the wallet's in-app scanner;
+3. the wallet **reproduces the order for review**, prefilled, and the customer
+   pays — signed on-device, submitted to the ledger via the SDK;
+4. the shop's backend **watches the ledger** and marks the order paid the moment
+   the transfer settles.
 
 ```mermaid
 flowchart LR
-    subgraph phone["Phone · clients only, nothing listens"]
-        direction TB
-        walletapp["Wallet app<br/>wallet SDK stack<br/>Enclave / Keystore signer"]
-        dappapp["dApp app<br/>links only canton-dapp"]
+    subgraph phone["Wallet · phone"]
+        wallet["Canton Wallet<br/>native SDK · enclave / keystore signer"]
     end
-
-    subgraph infra["Next to LocalNet · public"]
+    subgraph shop["dApp shop · public, next to LocalNet"]
         direction TB
-        server["dApp server (JavaScript)<br/>CIP-0103 endpoint · sign-in verify<br/>ledger watcher / settler"]
-        ledger["Canton LocalNet"]
-        server --> ledger
+        store["Storefront + checkout<br/>dapp-server · @canton-network JS SDKs"]
+        watch["Ledger watcher / settler"]
     end
+    ledger["Canton LocalNet"]
 
-    walletapp <==>|"CIP-0103 JSON-RPC 2.0<br/>wallet dials out"| server
-    dappapp -.->|"same-device deep link"| walletapp
+    store -.->|"checkout QR<br/>(canton-checkout:)"| wallet
+    wallet ==>|"pays, signed on device"| ledger
+    watch -->|"watches for the memo"| ledger
+    watch -.->|"order → Paid"| store
 
-    style server stroke-width:3px
+    style wallet stroke-width:3px
 ```
 
-**Both ends are clients; the server is public.** The dApp server (JavaScript,
-running next to LocalNet) hosts the connection endpoint and watches/settles on
-the ledger. The **wallet dials out to it** and answers CIP-0103 requests over
-that connection — the model WalletConnect and the official `remote` adapter
-use, and the one thing that always works from a phone (no NAT hole, no
-listening socket, no backgrounding fight). Same-device, a deep link hands the
-request across with no server at all.
+No relay, no server on the phone, no key ever leaving the device. The QR is a
+self-describing payload, so the wallet prefills instantly — offline, with no
+call back to the shop until the on-ledger payment itself. A direct CIP-0103
+connection (WalletConnect-style one-tap) is the roadmap; today the ledger plus
+the QR carry the flow.
 
-**Keys never cross the boundary.** Whichever transport carries them, the frames
-are identical: the wallet routes each into a `DappSession`, anything touching
-an account or key raises an **approval sheet** — the user decides — and signing
-happens in the device's Keystore / Secure Enclave. The dApp receives only
-signatures and results, never a key. That substitutability is why the protocol
-seam sits at the JSON-RPC frame.
+## What's implemented — and what it proves for the SDK
 
-> **Status.** The wallet no longer runs an on-device server (a phone shouldn't):
-> that role moved off the phone to the public dApp server above. The JavaScript
-> dApp server and the wallet's dial-out client are in progress; the SDK's
-> `canton-dapp-lan` gRPC transport remains for same-network and test-harness
-> connections. See the SDK's dApp-connectivity work.
+### The wallet — native `canton-mobile-sdk`
 
-## What the wallet demonstrates
+- **Self-custody on device hardware.** External-party onboarding with keys in
+  the Secure Enclave (iOS) or Android Keystore (StrongBox with TEE fallback),
+  never leaving the device. The signer sheet reports the achieved security level
+  honestly — including "software" in simulators. *Proves: `SigningDriver`,
+  `ExternalPartyClient`.*
+- **Verify before signing.** Every externally-signed transaction goes through
+  the SDK's client-side prepared-transaction hash verification: the hardware key
+  only signs a hash the device recomputed from the transaction itself. *Proves:
+  `signAndExecute` hash verification, held to shared golden vectors.*
+- **CIP-0056 token standard.** Portfolio (holdings rolled up per instrument),
+  the propose→accept inbox with on-device signed accept/reject, transfers with
+  memos, and holdings history with transaction detail. *Proves:
+  `TokenStandardClient`, registry choice contexts.*
+- **Transfer preapprovals.** "Instant receiving" is a switch: on requests a
+  receiver-signed preapproval; off exercises `TransferPreapproval_Cancel`, also
+  signed on-device. *Proves: the preapproval request / lookup / cancel APIs.*
+- **Scan to pay.** The Send scanner — and the phone camera, via the
+  `canton-checkout:` deep link — reads a shop's checkout QR, reproduces the
+  order for review, and prefills the transfer. *Proves: the wallet as a real
+  payer against a dApp.*
+- **Adaptive layouts from stock components.** `NavigationSplitView` sidebar on
+  iPad; `NavigationSuiteScaffold` bar→rail on Android phones, tablets, foldables.
 
-- **Self-custody on device hardware.** External-party onboarding with keys
-  generated in the Secure Enclave (iOS) or Android Keystore (StrongBox with
-  TEE fallback), never leaving the device. The signer sheet reports the
-  achieved security level honestly — including "software" in simulators.
-- **Verify before signing.** Every externally-signed transaction goes
-  through the SDK's client-side prepared-transaction hash verification: the
-  hardware key only signs hashes the device has independently recomputed
-  from the transaction itself.
-- **CIP-0056 token standard.** Portfolio (holdings rolled up per
-  instrument), the propose→accept inbox with on-device signed
-  accept/reject, transfers with memos via registry choice contexts, and
-  holdings history with transaction detail.
-- **Transfer preapprovals as a product feature.** "Instant receiving" is a
-  switch: on requests a receiver-signed preapproval (the validator
-  automation accepts and pays); off exercises `TransferPreapproval_Cancel`,
-  also signed on-device.
-- **Cross-device payments.** The Send screen's QR scanner (VisionKit on
-  iOS, Google code scanner on Android) reads another wallet's Receive code.
-- **Adaptive layouts from stock components.** NavigationSplitView sidebar
-  on iPad; `NavigationSuiteScaffold` bar→rail on Android phones, tablets,
-  and foldables.
+### The dApp shop — official `@canton-network` JS SDKs
 
-## What the dApp demonstrates
+- **Storefront, cart, checkout.** A browsable shop that turns a cart into one
+  payable order priced in Canton Coin.
+- **Ledger watch and settle.** The backend watches the ledger (`wallet-sdk`) and
+  marks an order paid when the matching transfer lands — no key on the server.
+- **Sign in with Canton.** Verifies a wallet controls a party by checking a
+  signed challenge against its public key — the first external consumer of the
+  SDK's `signMessage` domain-separation scheme.
+- **Scan-to-pay payload.** A self-describing `canton-checkout://pay?…` QR the
+  wallet reads inline.
 
-- **The module split, enforced by the build.** The dApp links only
-  `canton-dapp` and the LAN transport. It *cannot* reach a signing driver or
-  the Ledger API stubs — there is no import path — and its R8 release and iOS
-  simulator builds succeeding from that dependency set alone is the proof, run
-  on every CI build.
+  *Proves: the **official ecosystem SDKs** drive a real dApp against our wallet —
+  an independent implementation, not our own client talking to our own engine.*
+
+### The dApp app — `canton-dapp` only
+
+- **The module split, enforced by the build.** Links only `canton-dapp`; it
+  *cannot* reach a signing driver or the Ledger API stubs — there is no import
+  path — and its R8 release and iOS simulator builds succeeding from that
+  dependency set alone is the proof, run on every CI build.
 - **The custody boundary.** A dApp receives signatures and update ids, never a
-  key and never a ledger token. Everything sensitive stays behind the wallet's
-  approval sheet.
-- **Transport-swap portability.** The same `DappClient` code runs unchanged
-  over any transport — a LAN gRPC stream, the in-process transport when a B2B
-  app embeds the wallet, or a WalletConnect / `remote` connection to a public
-  dApp server. The app is written once against the standard API.
-- **Sign in with Canton** (landing): prove control of a party by having the
-  wallet sign a challenge, verified against the account's public key — the
-  Canton analog of Sign-In with Ethereum, no value moved.
+  key and never a ledger token.
 
-## Layout
+## Setup
 
-Grouped by platform, so each toolchain builds both apps in one place:
+Two prerequisites: a **sibling checkout** of the SDK, and a running **LocalNet**.
 
-- `android/` — one Gradle build with two application modules:
-  `wallet-app` and `dapp-app`.
-- `ios/` — one XcodeGen project (`project.yml`, generated and not committed)
-  with two schemes: `CantonWallet` (sources in `Sources/Wallet`) and
-  `CantonDapp` (`Sources/Dapp`).
-- `dapp-server/` — the public [dApp server](dapp-server/README.md) (Node/TS,
-  the official `@canton-network` SDKs): a reference shop. A storefront +
-  checkout, Sign-in-with-Canton, and orders that settle when the payment lands
-  on the ledger.
-
-The two apps deliberately share **no** module: the dApp's independence from
-the wallet stack is the thing being shown, and a shared "common" module would
-be the back door that quietly undoes it.
-
-## SDK dependency
-
-Both apps build against a **sibling checkout** of the SDK working tree, not
-a published release:
+**1. Sibling SDK checkout.** The apps build against the SDK working tree, not a
+published release — clone it alongside this repo:
 
 ```
 <parent>/
 ├── canton-mobile-app/   (this repo)
-└── canton-mobile-sdk/
+└── canton-mobile-sdk/   (git clone alongside it)
 ```
 
 - iOS: `ios/project.yml` references the SDK as a local Swift package at
   `../../canton-mobile-sdk`.
 - Android: `android/settings.gradle.kts` uses a Gradle composite build
-  (`includeBuild("../../canton-mobile-sdk/kotlin")`) that substitutes the
+  (`includeBuild("../../canton-mobile-sdk/kotlin")`) substituting the
   `io.github.vsima.canton:*` coordinates with SDK source.
 
-CI checks out both repos into the same sibling layout.
+CI checks out both repos into this layout.
 
-## Building
+**2. LocalNet.** The apps talk to a Splice LocalNet — boot one from the SDK repo:
 
 ```sh
-make ios       # xcodegen generate + simulator build, both schemes
-make android   # assembleDebug + assembleRelease (R8), both modules
+cd ../canton-mobile-sdk && SPLICE_LOCALNET=1 integration/run-localnet.sh
 ```
 
-## Running against a live network
+The SDK's `LocalNetFaucetTool` seeds test balances and pending offers.
 
-The apps expect a Splice LocalNet (the SDK's `integration/run-localnet.sh`
-boots one). Simulators and emulators reach it directly; physical devices
-use adb reverse tunnels:
+## Build, install, run
+
+### The mobile apps — wallet + dApp app
+
+```sh
+make android   # assembleDebug + assembleRelease (R8), both modules
+make ios       # xcodegen generate + simulator build, both schemes
+```
+
+Install the wallet on a device — always with `-r`. **Never uninstall it:** that
+destroys the device key and, with it, the party.
+
+```sh
+adb install -r android/wallet-app/build/outputs/apk/debug/wallet-app-debug.apk
+```
+
+A physical device reaches LocalNet over adb reverse tunnels, then launches with
+a host override (an emulator uses the `10.0.2.2` bridge automatically; the
+override sticks across relaunches, including deep links):
 
 ```sh
 adb reverse tcp:2901 tcp:2901   # ledger gRPC
 adb reverse tcp:4000 tcp:4000   # scan / registry
 adb reverse tcp:2000 tcp:2000   # validator API
+adb shell am start -n io.github.vsima.canton.app/.MainActivity --es host 127.0.0.1
 ```
 
-then launch with the host override:
-`adb shell am start -n io.github.vsima.canton.app/.MainActivity --es host 127.0.0.1`.
-On Android emulators the app defaults to the `10.0.2.2` host bridge. The
-SDK repo's faucet tool (`LocalNetFaucetTool`) seeds test balances and
-pending offers.
+### The dApp shop — server
 
-## Connecting the dApp to the wallet
+```sh
+cd dapp-server
+npm install
+MERCHANT_PARTY=<a party with instant-receiving> PUBLIC_URL=http://<your-lan-ip>:8088 npm start
+```
 
-The cross-process connection is being rebuilt around a public dApp server
-(see **Architecture**, above): the JavaScript dApp server hosts the CIP-0103
-endpoint and the wallet dials out to it. The dApp app's connect screen already
-drives the SDK's `canton-dapp-lan` gRPC client against any `LanGrpcDappServer`
-(a test harness or desktop server) for same-network development. A step-by-step
-walkthrough lands with the dApp server.
+Open `http://localhost:8088`. Set `PUBLIC_URL` to a **LAN address** so the
+checkout QR is reachable from a phone. See
+[dapp-server/README.md](dapp-server/README.md) for the full configuration and
+endpoints.
+
+## Try it: scan to pay
+
+1. Open the shop, add items to the cart, and **check out**.
+2. **Scan the checkout QR** with your phone — the built-in camera opens the
+   wallet (or use the wallet's Send scanner).
+3. The wallet shows the order for **review**, prefilled; tap **Send**.
+4. Watch the shop flip to **Paid** as the payment settles on-ledger.
+
+## Layout
+
+Grouped by platform / runtime, so each toolchain builds its piece in one place:
+
+- `android/` — one Gradle build with two application modules: `wallet-app` and
+  `dapp-app`.
+- `ios/` — one XcodeGen project (`project.yml`, generated and not committed) with
+  two schemes: `CantonWallet` (`Sources/Wallet`) and `CantonDapp` (`Sources/Dapp`).
+- `dapp-server/` — the Node/TS [dApp shop](dapp-server/README.md).
+
+The mobile apps deliberately share **no** module: the dApp app's independence
+from the wallet stack is the thing being shown, and a shared "common" module
+would be the back door that quietly undoes it.
 
 ## License
 
