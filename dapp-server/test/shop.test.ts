@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CATALOG, findProduct, checkout, INSTRUMENT_ID } from '../src/shop.ts';
+import { CATALOG, findProduct, checkoutCart, INSTRUMENT_ID } from '../src/shop.ts';
 import { OrderBook } from '../src/orders.ts';
 import type { IncomingPayment } from '../src/ledger.ts';
 
@@ -19,31 +19,55 @@ test('the catalog has products, each priced and identifiable', () => {
   }
 });
 
-test('checkout creates a pending Amulet order priced at the product', () => {
+test('checkoutCart with one item prices the order at the product', () => {
   const orders = new OrderBook();
-  const { product, order } = checkout('coffee', MERCHANT, orders);
-  assert.equal(product.id, 'coffee');
+  const { order, lineItems, total } = checkoutCart([{ productId: 'coffee', quantity: 1 }], MERCHANT, orders);
+  assert.equal(total, '5');
+  assert.equal(order.amount, '5');
   assert.equal(order.status, 'pending');
   assert.equal(order.payTo, MERCHANT);
-  assert.equal(order.amount, product.priceCc);
   assert.equal(order.instrumentId, INSTRUMENT_ID);
   assert.equal(order.memo, order.id); // the payer references the order id
+  assert.equal(lineItems.length, 1);
+  assert.equal(lineItems[0]?.quantity, 1);
+  assert.equal(lineItems[0]?.subtotal, '5');
 });
 
-test('an unknown product is rejected', () => {
-  assert.throws(() => checkout('spaceship', MERCHANT, new OrderBook()), /no such product/);
-});
-
-test('paying the checked-out order settles it (the full shop loop, in-memory)', () => {
+test('checkoutCart sums quantities across multiple items', () => {
   const orders = new OrderBook();
-  const { product, order } = checkout('mug', MERCHANT, orders);
+  const { order, lineItems, total } = checkoutCart(
+    [{ productId: 'coffee', quantity: 2 }, { productId: 'mug', quantity: 1 }], // 2×5 + 1×8
+    MERCHANT,
+    orders,
+  );
+  assert.equal(total, '18');
+  assert.equal(order.amount, '18');
+  assert.equal(order.description, '2× Coffee · 1× Enamel mug');
+  assert.equal(lineItems.find((l) => l.id === 'coffee')?.subtotal, '10');
+  assert.equal(lineItems.find((l) => l.id === 'mug')?.subtotal, '8');
+});
+
+test('an unknown product, empty cart, or bad quantity is rejected', () => {
+  assert.throws(() => checkoutCart([{ productId: 'spaceship', quantity: 1 }], MERCHANT, new OrderBook()), /no such product/);
+  assert.throws(() => checkoutCart([], MERCHANT, new OrderBook()), /empty/);
+  assert.throws(() => checkoutCart([{ productId: 'coffee', quantity: 0 }], MERCHANT, new OrderBook()), /quantity/);
+});
+
+test('paying the checked-out cart settles it (the full shop loop, in-memory)', () => {
+  const orders = new OrderBook();
+  const { order, total } = checkoutCart(
+    [{ productId: 'coffee', quantity: 2 }, { productId: 'stickers', quantity: 1 }], // 2×5 + 1×2 = 12
+    MERCHANT,
+    orders,
+  );
+  assert.equal(total, '12');
   const payment: IncomingPayment = {
     updateId: 'u-shop',
     offset: 1,
     recordTime: '2026-08-12T00:00:00Z',
     sender: 'buyer::1220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
     receiver: MERCHANT,
-    amount: product.priceCc,
+    amount: total,
     instrument: { admin: 'DSO::1220dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', id: INSTRUMENT_ID },
     memo: order.memo,
   };

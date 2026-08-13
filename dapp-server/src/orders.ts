@@ -47,6 +47,15 @@ export function scaledAmount(amount: string): bigint {
   return BigInt(whole) * 10_000_000_000n + BigInt(frac);
 }
 
+/** Renders a 10-dp scaled integer back to a decimal string, trailing zeros
+ *  trimmed — the inverse of {@link scaledAmount}, for summing cart totals. */
+export function unscaledAmount(scaled: bigint): string {
+  const whole = scaled / 10_000_000_000n;
+  const frac = scaled % 10_000_000_000n;
+  if (frac === 0n) return whole.toString();
+  return `${whole}.${frac.toString().padStart(10, '0').replace(/0+$/, '')}`;
+}
+
 export class OrderBook {
   private readonly orders = new Map<string, Order>();
 
