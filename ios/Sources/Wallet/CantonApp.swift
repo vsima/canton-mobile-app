@@ -502,8 +502,6 @@ struct SendView: View {
                                 amount: value,
                                 memo: memo
                             )
-                            amount = ""
-                            memo = ""
                         }
                     }
                 }
@@ -514,6 +512,16 @@ struct SendView: View {
                 )
             }
             .navigationTitle("Send")
+            // Clear the form once a send succeeds (the receipt sheet appears).
+            // Kept until then so a failed send leaves the inputs to retry.
+            .onChange(of: model.lastSend?.id) { _, newId in
+                if newId != nil {
+                    receiver = ""
+                    amount = ""
+                    memo = ""
+                    checkoutNote = nil
+                }
+            }
             // Prewarm/refresh the cached fee config as the amount changes;
             // the estimate itself recomputes from cache — no network call
             // per keystroke.

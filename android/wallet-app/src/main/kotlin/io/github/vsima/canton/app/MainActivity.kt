@@ -688,6 +688,17 @@ private fun SendScreen(model: WalletModel) {
     // estimate itself recomputes from cache — no network call per keystroke.
     LaunchedEffect(amount) { model.ensureFeePreviewFresh() }
 
+    // Clear the form once a send succeeds (the receipt sheet appears). Kept
+    // until then so a failed send leaves the inputs to retry.
+    LaunchedEffect(model.lastSend) {
+        if (model.lastSend != null) {
+            receiver = ""
+            amount = ""
+            memo = ""
+            checkoutNote = null
+        }
+    }
+
     Column(
         Modifier.padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -785,8 +796,6 @@ private fun SendScreen(model: WalletModel) {
             onClick = {
                 val value = amount.toBigDecimalOrNull() ?: return@Button
                 model.sendAsync(receiver.trim(), value, memo)
-                amount = ""
-                memo = ""
             },
             enabled = !model.busy && receiver.isNotBlank() && amount.toBigDecimalOrNull() != null,
             modifier = Modifier.fillMaxWidth(),
