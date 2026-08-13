@@ -53,6 +53,16 @@ export function storefrontHtml(options: StorefrontOptions): string {
   .row .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; word-break:break-all; }
   .status { margin-top:16px; padding:12px; border-radius:10px; background:rgba(59,91,219,.08); text-align:center; }
   .status.paid { background:rgba(46,125,50,.12); color:var(--ok); font-weight:600; }
+  .success { text-align:center; padding:32px 22px; }
+  .checkmark { width:128px; height:128px; }
+  .ck-circle { fill:none; stroke:var(--ok); stroke-width:3; stroke-dasharray:151; stroke-dashoffset:151; animation:ckdraw .5s cubic-bezier(.65,0,.45,1) forwards; }
+  .ck-check { fill:none; stroke:var(--ok); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:40; stroke-dashoffset:40; animation:ckdraw .35s .5s cubic-bezier(.65,0,.45,1) forwards; }
+  @keyframes ckdraw { to { stroke-dashoffset:0; } }
+  .paid-title { font-size:2.4rem; margin:14px 0 4px; color:var(--ok); animation:pop .45s .35s both; }
+  .paid-sub { color:var(--muted); margin:0 0 20px; }
+  @keyframes pop { 0%{transform:scale(.5);opacity:0} 70%{transform:scale(1.08)} 100%{transform:scale(1);opacity:1} }
+  .confetti { position:fixed; top:-14px; width:9px; height:15px; border-radius:2px; opacity:.9; pointer-events:none; z-index:50; animation-name:confall; animation-timing-function:linear; animation-fill-mode:forwards; }
+  @keyframes confall { to { transform:translateY(110vh) rotate(720deg); } }
   .note { background:var(--card); border:1px dashed var(--line); border-radius:12px; padding:16px; color:var(--muted); font-size:.9rem; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 </style>
@@ -143,11 +153,40 @@ function poll(orderId) {
     fetch('/orders/' + orderId).then(function (r) { return r.json(); }).then(function (data) {
       if (data.order && data.order.status === 'settled') {
         clearInterval(timer);
-        var s = document.getElementById('status');
-        if (s) { s.className = 'status paid'; s.textContent = '✓ Paid — thank you!'; }
+        renderPaid(data.order);
       }
     }).catch(function () {});
   }, 2500);
+}
+
+function renderPaid(order) {
+  var app = document.getElementById('app');
+  app.innerHTML = '';
+  var check = h('div', {});
+  check.innerHTML = '<svg viewBox="0 0 52 52" class="checkmark"><circle class="ck-circle" cx="26" cy="26" r="24"/><path class="ck-check" d="M14 27l7 7 16-16"/></svg>';
+  var more = h('button', { text: 'Back to shop' });
+  more.onclick = load;
+  app.appendChild(h('div', { 'class': 'success' }, [
+    check,
+    h('h2', { 'class': 'paid-title', text: 'Paid!' }),
+    h('p', { 'class': 'paid-sub', text: (order.description ? order.description + ' — ' : '') + order.amount + ' CC settled on-ledger.' }),
+    more,
+  ]));
+  confetti();
+}
+
+function confetti() {
+  var colors = ['#3b5bdb', '#2e7d32', '#f59f00', '#e64980', '#7891ff', '#5bd977'];
+  for (var i = 0; i < 30; i++) {
+    var c = document.createElement('div');
+    c.className = 'confetti';
+    c.style.left = (Math.random() * 100) + 'vw';
+    c.style.background = colors[i % colors.length];
+    c.style.animationDuration = (1.6 + Math.random() * 1.4) + 's';
+    c.style.animationDelay = (Math.random() * 0.3) + 's';
+    document.body.appendChild(c);
+    (function (el) { setTimeout(function () { el.remove(); }, 3400); })(c);
+  }
 }
 
 function load() {
