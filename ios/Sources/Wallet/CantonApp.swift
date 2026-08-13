@@ -30,6 +30,8 @@ struct WalletRootView: View {
                 ConnectionFailedView(message: message)
             }
         }
+        // App-wide: a tap outside a text field dismisses the keyboard.
+        .background(KeyboardDismisser())
         .task {
             // Reown must be configured before onboarding registers the dApp
             // session with it. Non-secret WalletConnect project id (a public
