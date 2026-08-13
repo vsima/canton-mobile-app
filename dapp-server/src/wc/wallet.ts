@@ -22,43 +22,55 @@ import {
   chainId,
   toAccount,
 } from './protocol.ts';
-import type { RequestTransferParams, SignMessageParams } from './protocol.ts';
+import type { DappAccount, RequestTransferParams, SignMessageParams } from './protocol.ts';
 
 /**
- * What the wallet can do when a request arrives. The two operations mirror the
- * two CIP-0103 methods. Implemented by the Canton-backed signer for real runs,
- * and by a fake in tests — neither the dispatch nor this interface knows about
- * WalletConnect.
+ * What the wallet can do when a request arrives — the CIP-0103 provider surface
+ * this reference implements. Implemented by the Canton-backed signer for real
+ * runs, and by a fake in tests — neither the dispatch nor this interface knows
+ * about WalletConnect.
  */
 export interface WalletSigner {
-  /** The party this wallet controls (its session account). */
-  readonly party: string;
-  /** Sign the CIP-0103 domain-separated bytes of `message`; returns a hex
-   *  signature and the SPKI-DER (hex) public key that verifies it. */
-  signMessage(message: string): Promise<{ signature: string; publicKey: string }>;
-  /** Approve and submit a transfer; returns the on-ledger update id. */
+  /** The account this wallet controls, as CIP-0103 `listAccounts` publishes it
+   *  (its `publicKey` is what a Sign-In signature verifies against). */
+  account(): DappAccount;
+  /** Sign the CIP-0103 domain-separated bytes of `message`; returns the hex
+   *  signature (the real `signMessage` result carries only the signature). */
+  signMessage(message: string): Promise<string>;
+  /** Approve and submit a transfer; returns the on-ledger update id. The
+   *  non-standard convenience path — a native wallet uses `prepareExecute`. */
   submitTransfer(params: RequestTransferParams): Promise<{ updateId: string }>;
 }
 
 /**
- * Routes a decoded JSON-RPC request to the signer and shapes the result. Pure:
- * no relay, no SDK — this is the unit-testable heart of the responder. Throws a
- * {@link WcRequestError} (with a CIP-0103 / EIP-1193 code) on an unknown method.
+ * Routes a decoded JSON-RPC request to the signer and shapes the result — the
+ * real CIP-0103 methods (`connect`, `listAccounts`, `signMessage`, …) plus the
+ * non-standard `canton_requestTransfer`. Pure: no relay, no SDK — the
+ * unit-testable heart of the responder. Throws a {@link WcRequestError} (with a
+ * CIP-0103 / EIP-1193 code) on an unknown method.
  */
 export async function dispatchWalletRequest(
   request: { method: string; params: unknown },
   signer: WalletSigner,
 ): Promise<unknown> {
   switch (request.method) {
+    case CANTON_METHODS.connect:
+    case CANTON_METHODS.isConnected:
+      return { isConnected: true, isNetworkConnected: true };
+    case CANTON_METHODS.disconnect:
+      return null;
+    case CANTON_METHODS.listAccounts:
+      return [signer.account()];
+    case CANTON_METHODS.getPrimaryAccount:
+      return signer.account();
     case CANTON_METHODS.signMessage: {
       const { message } = request.params as SignMessageParams;
-      const { signature, publicKey } = await signer.signMessage(message);
-      return { signature, party: signer.party, publicKey };
+      return { signature: await signer.signMessage(message) };
     }
     case CANTON_METHODS.requestTransfer: {
       const params = request.params as RequestTransferParams;
       const { updateId } = await signer.submitTransfer(params);
-      return { updateId, sender: signer.party };
+      return { updateId, sender: signer.account().partyId };
     }
     default:
       throw new WcRequestError(WC_ERRORS.unsupportedMethod, `unsupported method: ${request.method}`);
@@ -117,7 +129,7 @@ export class HeadlessWallet {
   }
 
   private async approve(proposal: SignClientTypes.EventArguments['session_proposal']): Promise<void> {
-    const account = toAccount(this.chain, this.signer.party);
+    const account = toAccount(this.chain, this.signer.account().partyId);
     const { acknowledged } = await this.client.approve({
       id: proposal.id,
       namespaces: {
