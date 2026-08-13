@@ -25,6 +25,7 @@ import {
 import { publicKeyToSpkiHex, signDomainMessageHex } from '../src/wc/crypto.ts';
 import { dispatchWalletRequest } from '../src/wc/wallet.ts';
 import type { WalletSigner } from '../src/wc/wallet.ts';
+import type { DappAccount } from '../src/wc/protocol.ts';
 import { verifySignature } from '../src/siwc.ts';
 
 // --- CAIP identifiers -------------------------------------------------------
@@ -88,12 +89,23 @@ test('signDomainMessageHex produces a signature siwc verifies (and rejects tampe
 
 // --- request dispatch -------------------------------------------------------
 
+const ACCOUNT: DappAccount = {
+  primary: true,
+  partyId: 'shopper::1220abc',
+  status: 'allocated',
+  hint: 'shopper',
+  publicKey: 'bb22',
+  namespace: '1220abc',
+  networkId: 'canton:localnet',
+  signingProviderId: 'test',
+};
+
 function fakeSigner(): { signer: WalletSigner; transfers: unknown[] } {
   const transfers: unknown[] = [];
   const signer: WalletSigner = {
-    party: 'shopper::1220abc',
+    account: () => ACCOUNT,
     async signMessage() {
-      return { signature: 'aa11', publicKey: 'bb22' };
+      return 'aa11';
     },
     async submitTransfer(params) {
       transfers.push(params);
@@ -103,13 +115,25 @@ function fakeSigner(): { signer: WalletSigner; transfers: unknown[] } {
   return { signer, transfers };
 }
 
-test('dispatch: canton_signMessage returns signature, party and publicKey', async () => {
+test('dispatch: connect reports a connected session', async () => {
+  const { signer } = fakeSigner();
+  const result = await dispatchWalletRequest({ method: CANTON_METHODS.connect, params: {} }, signer);
+  assert.deepEqual(result, { isConnected: true, isNetworkConnected: true });
+});
+
+test('dispatch: listAccounts returns the account (with its publicKey)', async () => {
+  const { signer } = fakeSigner();
+  const result = await dispatchWalletRequest({ method: CANTON_METHODS.listAccounts, params: {} }, signer);
+  assert.deepEqual(result, [ACCOUNT]);
+});
+
+test('dispatch: signMessage returns just the signature (real CIP-0103)', async () => {
   const { signer } = fakeSigner();
   const result = await dispatchWalletRequest(
     { method: CANTON_METHODS.signMessage, params: { message: 'hi' } },
     signer,
   );
-  assert.deepEqual(result, { signature: 'aa11', party: 'shopper::1220abc', publicKey: 'bb22' });
+  assert.deepEqual(result, { signature: 'aa11' });
 });
 
 test('dispatch: canton_requestTransfer submits and returns updateId + sender', async () => {

@@ -13,6 +13,7 @@
     "dev": "node --watch src/server.ts",
     "demo": "node src/demo.ts",
     "wc-demo": "node src/wc-demo.ts",
+    "wc-signin": "node src/wc-signin.ts",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },

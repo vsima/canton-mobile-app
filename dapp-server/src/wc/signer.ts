@@ -9,7 +9,7 @@
 
 import { publicKeyToSpkiHex, signDomainMessageHex } from './crypto.ts';
 import type { WalletSigner } from './wallet.ts';
-import type { RequestTransferParams } from './protocol.ts';
+import type { DappAccount, RequestTransferParams } from './protocol.ts';
 import type { LocalNetSdk } from '../localnet.ts';
 
 export interface CantonSignerOptions {
@@ -20,17 +20,26 @@ export interface CantonSignerOptions {
   party: string;
   /** Registry URL used when building the transfer. */
   registryUrl: URL;
+  /** CAIP-2 network id published in the account. */
+  networkId: string;
 }
 
 export function cantonWalletSigner(opts: CantonSignerOptions): WalletSigner {
+  const account: DappAccount = {
+    primary: true,
+    partyId: opts.party,
+    status: 'allocated',
+    hint: opts.party.split('::')[0] ?? '',
+    publicKey: publicKeyToSpkiHex(opts.keys.publicKey),
+    namespace: opts.party.split('::')[1] ?? '',
+    networkId: opts.networkId,
+    signingProviderId: 'headless',
+  };
   return {
-    party: opts.party,
+    account: () => account,
 
-    async signMessage(message: string): Promise<{ signature: string; publicKey: string }> {
-      return {
-        signature: signDomainMessageHex(message, opts.keys.privateKey),
-        publicKey: publicKeyToSpkiHex(opts.keys.publicKey),
-      };
+    async signMessage(message: string): Promise<string> {
+      return signDomainMessageHex(message, opts.keys.privateKey);
     },
 
     async submitTransfer(params: RequestTransferParams): Promise<{ updateId: string }> {

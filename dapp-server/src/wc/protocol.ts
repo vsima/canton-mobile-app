@@ -14,20 +14,38 @@
  *  has no registered one, so this reference defines `canton`. */
 export const CANTON_NAMESPACE = 'canton';
 
-/** The CIP-0103 methods this reference carries over a session, as JSON-RPC
- *  method names. `session_request({ method, params })` routes to one of these. */
+/** The methods this reference carries over a session, as JSON-RPC method names.
+ *  The connect/read methods and `signMessage` are **real CIP-0103** (OpenRPC
+ *  0.5.0) — the exact bare names the SDK's provider engine answers, so a native
+ *  wallet interoperates. `requestTransfer` is the exception: a dApp-server
+ *  convenience, because the standard payment path is `prepareExecute` with JSON
+ *  Ledger API commands (a separate slice). */
 export const CANTON_METHODS = {
-  /** Sign a structured message in the wallet (CIP-0103 `signMessage`); the
-   *  basis for Sign-In with Canton. Params {@link SignMessageParams}. */
-  signMessage: 'canton_signMessage',
-  /** Ask the wallet to approve and submit a token transfer. Params
-   *  {@link RequestTransferParams}. The wallet holds the keys and pays. */
+  /** Request a connection; the wallet grants accounts (usually via the user). */
+  connect: 'connect',
+  /** End the session. */
+  disconnect: 'disconnect',
+  /** Whether a connection exists, without prompting. */
+  isConnected: 'isConnected',
+  /** The accounts granted this dApp — each carries its `publicKey`. */
+  listAccounts: 'listAccounts',
+  /** The primary granted account. */
+  getPrimaryAccount: 'getPrimaryAccount',
+  /** Sign a structured message (Sign-In with Canton). {@link SignMessageParams}
+   *  → {@link SignMessageResult}. */
+  signMessage: 'signMessage',
+  /** NON-STANDARD dApp-server convenience: ask the wallet to build and submit a
+   *  transfer from high-level fields ({@link RequestTransferParams}) — the
+   *  headless demo's payment. A native wallet does not implement this; it pays
+   *  via `prepareExecute`. */
   requestTransfer: 'canton_requestTransfer',
 } as const;
 
 export type CantonMethod = (typeof CANTON_METHODS)[keyof typeof CANTON_METHODS];
 
-/** Every method this responder implements — the `methods` a session advertises. */
+/** Every method a session advertises. A wallet approves only the subset it
+ *  supports, so proposing the convenience method alongside the standard CIP-0103
+ *  ones is harmless against a wallet that implements only the standard set. */
 export const ALL_METHODS: readonly string[] = Object.values(CANTON_METHODS);
 
 // --- CAIP identifiers -------------------------------------------------------
@@ -85,18 +103,36 @@ export function partyFromAccount(account: string): string {
 
 // --- request / result payloads ----------------------------------------------
 
-/** `canton_signMessage` params: the exact string the wallet signs. */
+/** `signMessage` params: the exact string the wallet signs. */
 export interface SignMessageParams {
   message: string;
 }
 
-/** `canton_signMessage` result. `signature` and `publicKey` are hex; the public
- *  key is SPKI-DER (what the dApp verifies against, and what `listAccounts`
- *  publishes). `party` echoes which account signed. */
+/** `signMessage` result — the CIP-0103 shape: just the signature (hex). The
+ *  public key to verify it against comes from {@link DappAccount.publicKey} via
+ *  `listAccounts`, not from this result. */
 export interface SignMessageResult {
   signature: string;
-  party: string;
+}
+
+/** `connect` / `isConnected` result (OpenRPC `ConnectResult`). */
+export interface ConnectResult {
+  isConnected: boolean;
+  isNetworkConnected: boolean;
+  reason?: string;
+}
+
+/** One account `listAccounts` returns (OpenRPC `Wallet`). `publicKey` is the
+ *  SPKI-DER hex a Sign-In signature verifies against. */
+export interface DappAccount {
+  primary: boolean;
+  partyId: string;
+  status: string;
+  hint: string;
   publicKey: string;
+  namespace: string;
+  networkId: string;
+  signingProviderId: string;
 }
 
 /** `canton_requestTransfer` params — the payment the dApp asks the wallet to
@@ -122,16 +158,6 @@ export interface TransferResult {
   updateId: string;
   /** The party that paid (the wallet's own account). */
   sender: string;
-}
-
-/** Builds a `canton_requestTransfer` request payload from an order's fields. */
-export function transferRequest(params: RequestTransferParams): { method: string; params: RequestTransferParams } {
-  return { method: CANTON_METHODS.requestTransfer, params };
-}
-
-/** Builds a `canton_signMessage` request payload. */
-export function signMessageRequest(message: string): { method: string; params: SignMessageParams } {
-  return { method: CANTON_METHODS.signMessage, params: { message } };
 }
 
 // --- errors -----------------------------------------------------------------

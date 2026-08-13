@@ -12,7 +12,13 @@ import type { SessionTypes } from '@walletconnect/types';
 import { makeSignClient } from './client.ts';
 import type { WcConfig, WcMetadata, WcSignClient } from './client.ts';
 import { ALL_METHODS, CANTON_METHODS, CANTON_NAMESPACE, chainId } from './protocol.ts';
-import type { RequestTransferParams, SignMessageResult, TransferResult } from './protocol.ts';
+import type {
+  ConnectResult,
+  DappAccount,
+  RequestTransferParams,
+  SignMessageResult,
+  TransferResult,
+} from './protocol.ts';
 
 export class DappConnector {
   private readonly client: WcSignClient;
@@ -44,7 +50,28 @@ export class DappConnector {
     return { uri, approved: approval() };
   }
 
-  /** Ask the wallet to sign a message (Sign-In with Canton over the session). */
+  /** Request a connection — the wallet grants accounts (prompts the user). */
+  async connect(topic: string): Promise<ConnectResult> {
+    return this.client.request<ConnectResult>({
+      topic,
+      chainId: this.chain,
+      request: { method: CANTON_METHODS.connect, params: {} },
+    });
+  }
+
+  /** The accounts the wallet granted this dApp — each carries its `publicKey`,
+   *  which a Sign-In signature verifies against. */
+  async listAccounts(topic: string): Promise<DappAccount[]> {
+    return this.client.request<DappAccount[]>({
+      topic,
+      chainId: this.chain,
+      request: { method: CANTON_METHODS.listAccounts, params: {} },
+    });
+  }
+
+  /** Ask the wallet to sign a message (Sign-In with Canton over the session).
+   *  The result carries only the signature — verify it against the account's
+   *  `publicKey` from {@link listAccounts}. */
   async requestSignMessage(topic: string, message: string): Promise<SignMessageResult> {
     return this.client.request<SignMessageResult>({
       topic,

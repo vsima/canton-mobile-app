@@ -75,7 +75,7 @@ async function main(): Promise<void> {
 
   // Bring both ends of the session online. The wallet is backed by the Canton
   // signer; the dApp only asks and reads replies.
-  const signer = cantonWalletSigner({ sdk, keys, party: customer, registryUrl: localnetRegistryUrl });
+  const signer = cantonWalletSigner({ sdk, keys, party: customer, registryUrl: localnetRegistryUrl, networkId: NETWORK_ID });
   const wallet = await HeadlessWallet.create(wc, signer, NETWORK_ID, {
     name: 'Canton Wallet (headless)', description: 'reference wallet', url: 'http://localhost', icons: [],
   });
@@ -94,9 +94,13 @@ async function main(): Promise<void> {
   note(`session ${session.topic.slice(0, 12)}…  account ${partyFromAccount(account).slice(0, 32)}…`);
 
   step('⑥', 'authenticating over the session (Sign-In with Canton)…');
+  await dapp.connect(session.topic);
+  const accounts = await dapp.listAccounts(session.topic);
+  const acct = accounts[0];
+  if (acct === undefined) throw new Error('the wallet shared no accounts');
   const message = buildSignInMessage({
     domain: DOMAIN,
-    party: customer,
+    party: acct.partyId,
     statement: `Sign in to ${SHOP_NAME}.`,
     uri: `${SHOP}/login`,
     networkId: NETWORK_ID,
@@ -104,9 +108,9 @@ async function main(): Promise<void> {
     issuedAt: new Date().toISOString(),
   });
   const signed = await dapp.requestSignMessage(session.topic, message);
-  const sigOk = verifySignature(message, signed.publicKey, Buffer.from(signed.signature, 'hex'));
-  if (!sigOk || signed.party !== customer) throw new Error('sign-in verification failed');
-  note(`verified signature over the domain-separated challenge — signed by the session party ✓`);
+  const sigOk = verifySignature(message, acct.publicKey, Buffer.from(signed.signature, 'hex'));
+  if (!sigOk) throw new Error('sign-in verification failed');
+  note(`connect + listAccounts + signMessage (real CIP-0103) — verified by ${acct.partyId.slice(0, 32)}… ✓`);
 
   step('⑦', `checking out a cart at ${SHOP}…`);
   const checkoutRes = await fetch(`${SHOP}/shop/checkout`, {
