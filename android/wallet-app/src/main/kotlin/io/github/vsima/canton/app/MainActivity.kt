@@ -78,6 +78,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material.icons.outlined.WifiOff
@@ -170,10 +173,15 @@ fun WalletTheme(content: @Composable () -> Unit) {
 private enum class Section(val label: String, val icon: ImageVector) {
     Portfolio("Portfolio", Icons.Outlined.AccountBalanceWallet),
     Inbox("Inbox", Icons.Outlined.Inbox),
-    Send("Send", Icons.AutoMirrored.Outlined.Send),
-    Receive("Receive", Icons.Outlined.QrCode),
+    Transfer("Transfer", Icons.Outlined.SwapHoriz),
     History("History", Icons.Outlined.History),
     Connect("Connect", Icons.Outlined.Link),
+}
+
+/** The two pages of the Transfer section, paged by a segmented control. */
+private enum class TransferPage(val label: String) {
+    Send("Send"),
+    Receive("Receive"),
 }
 
 @Composable
@@ -242,7 +250,7 @@ private fun WalletTabs(model: WalletModel) {
 
     // A checkout deep link routes straight to Send, where it's prefilled.
     LaunchedEffect(model.pendingCheckoutUrl) {
-        if (model.pendingCheckoutUrl != null) section = Section.Send
+        if (model.pendingCheckoutUrl != null) section = Section.Transfer
     }
 
     // NavigationSuiteScaffold adapts the navigation itself: bottom bar on
@@ -274,8 +282,7 @@ private fun WalletTabs(model: WalletModel) {
                 when (section) {
                     Section.Portfolio -> PortfolioScreen(model)
                     Section.Inbox -> InboxScreen(model)
-                    Section.Send -> SendScreen(model)
-                    Section.Receive -> ReceiveScreen(model)
+                    Section.Transfer -> TransferScreen(model)
                     Section.History -> HistoryScreen(model)
                     Section.Connect -> ConnectScreen(model)
                 }
@@ -617,6 +624,35 @@ private fun InboxScreen(model: WalletModel) {
             HorizontalDivider()
         }
     }
+    }
+}
+
+/** Send and Receive under one nav item, paged by a segmented control at the top.
+ *  A `canton-checkout:` deep link lands on Send. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TransferScreen(model: WalletModel) {
+    var page by remember { mutableStateOf(TransferPage.Send) }
+    // A scanned/deep-linked checkout is a payment — show Send.
+    LaunchedEffect(model.pendingCheckoutUrl) {
+        if (model.pendingCheckoutUrl != null) page = TransferPage.Send
+    }
+    Column(Modifier.fillMaxSize()) {
+        SingleChoiceSegmentedButtonRow(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            TransferPage.entries.forEachIndexed { index, item ->
+                SegmentedButton(
+                    selected = page == item,
+                    onClick = { page = item },
+                    shape = SegmentedButtonDefaults.itemShape(index, TransferPage.entries.size),
+                ) { Text(item.label) }
+            }
+        }
+        when (page) {
+            TransferPage.Send -> SendScreen(model)
+            TransferPage.Receive -> ReceiveScreen(model)
+        }
     }
 }
 
