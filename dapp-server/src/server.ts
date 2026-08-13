@@ -13,7 +13,7 @@ import { NonceStore } from './nonceStore.ts';
 import { buildSignInMessage, verifySignIn } from './siwc.ts';
 import QRCode from 'qrcode';
 import { randomUUID } from 'node:crypto';
-import { OrderBook } from './orders.ts';
+import { OrderBook, type Order } from './orders.ts';
 import { CATALOG, checkoutCart, type CartItem } from './shop.ts';
 import { checkoutUri, checkoutView } from './checkout.ts';
 import { storefrontHtml } from './storefront.ts';
@@ -46,6 +46,22 @@ export function createApp(
   const wcSignIns = new Map<string, WcSignIn>();
   let dappConnectorPromise: Promise<import('./wc/dapp.ts').DappConnector> | null = null;
 
+  // A signed-in party's live WalletConnect session (kept from sign-in), so a
+  // checkout can push the payment straight to that wallet.
+  const connectedSessions = new Map<string, string>(); // party -> session topic
+
+  // The wallet SDK (for building a Token Standard transfer to push) is loaded
+  // lazily on first payment, like the ledger watcher — the sign-in path never
+  // needs it.
+  let localNetSdkPromise: ReturnType<typeof buildLocalNetSdk> | null = null;
+  function buildLocalNetSdk() {
+    return import('./localnet.ts').then((m) => m.createLocalNetSdk());
+  }
+  function localNetSdk() {
+    if (localNetSdkPromise === null) localNetSdkPromise = buildLocalNetSdk();
+    return localNetSdkPromise;
+  }
+
   function wcProjectConfig(): { projectId: string; relayUrl?: string } | null {
     const projectId = process.env['WC_PROJECT_ID'];
     if (projectId === undefined || projectId === '') return null;
@@ -64,6 +80,45 @@ export function createApp(
       });
     }
     return dappConnectorPromise;
+  }
+
+  // One-tap pay: build the Token Standard transfer with the wallet SDK, then ask
+  // the connected wallet to prepare → verify → sign → execute it over its live
+  // WalletConnect session (CIP-0103 `prepareExecuteAndWait`). The wallet supplies
+  // its own synchronizer and signs in its enclave; the server only names the
+  // sender, recipient, amount, and memo. Fire-and-forget off the checkout
+  // response — the wallet prompts the user, and the ledger watcher is what
+  // actually settles the order, exactly as the scan-to-pay path does.
+  async function pushPayment(party: string, topic: string, order: Order): Promise<void> {
+    const wc = wcProjectConfig();
+    if (wc === null) return;
+    const short = order.id.slice(0, 8);
+    try {
+      const [dapp, sdk, { localnetRegistryUrl }] = await Promise.all([
+        dappConnector(wc),
+        localNetSdk(),
+        import('./localnet.ts'),
+      ]);
+      const [command, disclosedContracts] = await sdk.token.transfer.create({
+        sender: party,
+        recipient: order.payTo,
+        amount: order.amount,
+        instrumentId: order.instrumentId ?? 'Amulet',
+        registryUrl: localnetRegistryUrl,
+        memo: order.memo,
+      });
+      console.log(`[pay ${short}] pushing prepareExecuteAndWait to ${party.slice(0, 24)}… over ${topic.slice(0, 10)}…`);
+      const result = await dapp.prepareExecuteAndWait(topic, {
+        commands: [command],
+        actAs: [party],
+        disclosedContracts,
+      });
+      console.log(`[pay ${short}] wallet executed → ${result.tx.status} ${result.tx.payload?.updateId?.slice(0, 12) ?? ''}`.trimEnd());
+    } catch (e) {
+      // The wallet declined, went offline, or the transfer failed to build. The
+      // order stays payable by QR; the storefront just never gets a settle.
+      console.log(`[pay ${short}] push failed: ${(e as Error).message}`);
+    }
   }
 
   // The storefront — the dApp's own frontend, served by its backend.
@@ -162,8 +217,9 @@ export function createApp(
       );
       wcSignIns.set(id, { status: 'pending', startedAt: Date.now() });
       void done.then(
-        ({ party }) => {
+        ({ party, topic }) => {
           console.log(`${tag} SIGNED IN ${party}`);
+          connectedSessions.set(party, topic); // keep the session for one-tap pay
           wcSignIns.set(id, { status: 'signed-in', party, startedAt: Date.now() });
         },
         (e: unknown) => {
@@ -220,12 +276,25 @@ export function createApp(
         item: itemSummary(lineItems),
       });
       const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
+
+      // If the caller is a signed-in wallet with a live session, push the payment
+      // straight to it (one-tap pay) instead of relying on the QR. Fire-and-forget:
+      // the wallet prompts the user, the watcher settles. The QR is still returned
+      // as the manual fallback.
+      const party = typeof body['party'] === 'string' ? body['party'] : undefined;
+      const topic = party !== undefined ? connectedSessions.get(party) : undefined;
+      const pushed = topic !== undefined;
+      if (party !== undefined && topic !== undefined) {
+        void pushPayment(party, topic, order);
+      }
+
       res.status(201).json({
         order,
         lineItems,
         total,
         payment: { payTo: order.payTo, amount: order.amount, instrumentId: order.instrumentId ?? null, memo: order.memo },
         checkout: { uri, qrSvg },
+        pushed,
       });
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });

@@ -66,6 +66,13 @@ export function storefrontHtml(options: StorefrontOptions): string {
   .qrbox { text-align:center; }
   .qrbox svg { width:230px; height:230px; background:#fff; border-radius:12px; padding:10px; }
   .qrbox .cap { color:var(--muted); font-size:.85rem; margin-top:8px; }
+  .pushbox { text-align:center; padding:18px 8px; }
+  .pushbox .push-emoji { font-size:3.4rem; line-height:1; display:inline-block; animation:pushwiggle 1.6s ease-in-out infinite; }
+  .pushbox .push-title { font-size:1.15rem; font-weight:700; margin-top:12px; }
+  .pushbox .push-sub { color:var(--muted); font-size:.9rem; margin-top:6px; }
+  @keyframes pushwiggle { 0%,100%{transform:rotate(-7deg)} 50%{transform:rotate(7deg)} }
+  .manual .qrbox { margin:14px 0 6px; }
+  .manual .qrbox svg { width:180px; height:180px; }
   .li { display:flex; justify-content:space-between; gap:10px; padding:6px 0; }
   .li .q { color:var(--muted); }
   .manual { margin-top:18px; }
@@ -211,7 +218,11 @@ function showCart() {
 function doCheckout() {
   var items = cartIds().map(function (id) { return { productId: id, quantity: cart[id] }; });
   if (items.length === 0) return;
-  fetch('/shop/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items }) })
+  // Include the signed-in party so a connected wallet gets the payment pushed to
+  // it (one-tap pay); otherwise the server just returns the scan-to-pay QR.
+  var payload = { items: items };
+  if (signedInParty) payload.party = signedInParty;
+  fetch('/shop/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.error) { alert(data.error); return; }
@@ -234,12 +245,20 @@ function summaryPanel(lineItems, total) {
   ]));
 }
 
-function manualPanel(payment) {
+// The manual-payment fallback: always the raw payment details (amount / to /
+// memo). When the payment was pushed to a wallet (one-tap), the scan-to-pay QR
+// is demoted into here too, since it is no longer the primary path.
+function manualPanel(payment, checkout) {
   function kv(k, v) { return h('div', { 'class': 'kv' }, [h('span', { 'class': 'k', text: k }), h('span', { 'class': 'v', text: v }), copyBtn(v)]); }
   var d = document.createElement('details');
   d.className = 'manual panel';
   var s = document.createElement('summary'); s.textContent = 'Prefer to pay manually? Show payment details';
   d.appendChild(s);
+  if (checkout && checkout.qrSvg) {
+    var qr = document.createElement('div'); qr.className = 'qrbox';
+    qr.innerHTML = checkout.qrSvg + '<div class="cap">…or scan with your Canton wallet to review &amp; pay</div>';
+    d.appendChild(qr);
+  }
   d.appendChild(kv('Amount', payment.amount + ' CC'));
   d.appendChild(kv('To', payment.payTo));
   d.appendChild(kv('Memo', payment.memo));
@@ -249,12 +268,29 @@ function manualPanel(payment) {
 function showCheckout(data) {
   var app = document.getElementById('app');
   app.innerHTML = '';
-  var status = h('div', { 'class': 'statusbar', id: 'status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Waiting for payment…' })]);
-  var qr = h('div', { 'class': 'qrbox' });
-  qr.innerHTML = data.checkout.qrSvg + '<div class="cap">Scan with your Canton wallet to review &amp; pay</div>';
-  var cols = h('div', { 'class': 'checkout-cols' }, [qr, summaryPanel(data.lineItems, data.total)]);
   var back = h('button', { 'class': 'ghost', text: '← back to cart' }); back.onclick = showCart;
-  app.appendChild(h('div', {}, [status, cols, manualPanel(data.payment), h('div', { style: 'margin-top:14px' }, [back])]));
+
+  if (data.pushed) {
+    // One-tap pay: the payment was pushed to the signed-in wallet. Primary state
+    // is "check your phone"; the QR moves into the manual fallback panel.
+    var status = h('div', { 'class': 'statusbar', id: 'status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Waiting for approval…' })]);
+    var who = signedInParty ? ' (' + shortParty(signedInParty) + ')' : '';
+    var push = h('div', { 'class': 'pushbox' });
+    push.innerHTML = '<div class="push-emoji">📲</div>' +
+      '<div class="push-title">Check your phone</div>' +
+      '<div class="push-sub">Approve the payment in your wallet' + who + '.</div>';
+    var cols = h('div', { 'class': 'checkout-cols' }, [push, summaryPanel(data.lineItems, data.total)]);
+    app.appendChild(h('div', {}, [status, cols, manualPanel(data.payment, data.checkout), h('div', { style: 'margin-top:14px' }, [back])]));
+    return;
+  }
+
+  // No live wallet session — scan the QR to pay (the payment details stay in the
+  // manual panel, without a duplicate QR).
+  var status2 = h('div', { 'class': 'statusbar', id: 'status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Waiting for payment…' })]);
+  var qrbox = h('div', { 'class': 'qrbox' });
+  qrbox.innerHTML = data.checkout.qrSvg + '<div class="cap">Scan with your Canton wallet to review &amp; pay</div>';
+  var cols2 = h('div', { 'class': 'checkout-cols' }, [qrbox, summaryPanel(data.lineItems, data.total)]);
+  app.appendChild(h('div', {}, [status2, cols2, manualPanel(data.payment, null), h('div', { style: 'margin-top:14px' }, [back])]));
 }
 
 function poll(orderId) {
