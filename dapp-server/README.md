@@ -80,15 +80,15 @@ wallet answers, so a phone interoperates:
 | `connect` | — | `{ isConnected, isNetworkConnected }` — the wallet grants accounts |
 | `listAccounts` | — | `[ { partyId, publicKey, … } ]` — each account's key, for verification |
 | `signMessage` | `{ message }` | `{ signature }` — Sign-In with Canton over the session |
-| `canton_requestTransfer` ⚠︎ | `{ to, amount, instrument, memo, shop?, item? }` | `{ updateId, sender }` — **non-standard convenience** |
+| `prepareExecuteAndWait` | `{ commands, actAs, disclosedContracts? }` | `{ tx }` — the wallet prepares, signs, and executes a pushed payment |
 
 Sign-In is the real thing: `connect` → `listAccounts` (to read the account's
-`publicKey`) → `signMessage`, then verify. The one non-standard method is
-`canton_requestTransfer`, a convenience that lets the wallet build a payment from
-high-level fields — the headless demo's payment. **A native wallet does not
-implement it**; the standard payment path is `prepareExecute` with JSON Ledger
-API commands, a separate slice. It is advertised alongside the standard methods
-and simply ignored by a wallet that only implements CIP-0103.
+`publicKey`) → `signMessage`, then verify. Payment is `prepareExecuteAndWait`:
+the dApp builds a Token Standard transfer and pushes the prepared commands; the
+wallet prepares on its participant, verifies the prepared-tx hash, signs in its
+enclave, and executes. Every method the session advertises is **standard
+CIP-0103** — the exact bare names the SDK's provider engine answers, so a native
+wallet interoperates.
 
 Funds never touch the relay: it moves only ciphertext, and the wallet still
 signs in its enclave and submits to the ledger itself — the server only watches
@@ -97,8 +97,9 @@ reference pins down: WalletConnect names chains and accounts in CAIP form, but a
 Canton party id contains `::`, which a CAIP-10 address forbids — so the party is
 percent-encoded into the address segment (`canton:localnet:<encoded-party>`); and
 Canton has no registered WalletConnect namespace, so `canton` is a convention of
-this reference. `npm run wc-demo` runs the whole thing headless; `npm run
-wc-signin` drives Sign-In against a **real phone** (see below).
+this reference. `npm run wc-signin` drives Sign-In against a **real phone** (see
+below), and the storefront's one-tap checkout pushes `prepareExecuteAndWait` to a
+signed-in wallet.
 
 ### Merchant orders — ledger watch and settle
 
@@ -147,7 +148,6 @@ matches what the nonce was issued for; and the timestamps are fresh.
 npm install
 MERCHANT_PARTY=<party> npm start   # then open http://localhost:8088 for the shop
 npm run demo                       # headless: a simulated customer buys and pays a cart
-WC_PROJECT_ID=<id> npm run wc-demo    # headless: the same, over a live WalletConnect session
 WC_PROJECT_ID=<id> npm run wc-signin  # a REAL phone: Sign-In with Canton over WalletConnect (prints a QR)
 npm test                           # node --test — sign-in, order matching, WalletConnect, and the shop
 npm run typecheck                  # tsc --noEmit
@@ -158,14 +158,12 @@ LocalNet: it allocates a fresh customer party, funds it, checks out a cart, pays
 the order, and waits for the shop to settle it — the SDK's external-party
 pipeline end to end.
 
-`npm run wc-demo` is that same loop over a **live WalletConnect session** instead
-of a scanned QR: it brings up a dApp and a headless wallet, pairs them over the
-public relay, authenticates the party (Sign-In with Canton over the session),
-then the dApp pushes a payment request the wallet approves and settles. It needs
-a WalletConnect project id (free, from cloud.reown.com) in `WC_PROJECT_ID`, plus
-the same running shop + LocalNet as `npm run demo`. The unit tests cover the
-transport's offline parts (CAIP encoding, signing, request dispatch); the relay
-round-trip is this demo, the way `npm run demo` is the ledger round-trip.
+The same loop runs over a **live WalletConnect session** with a real phone: the
+wallet pairs, authenticates the party (Sign-In with Canton over the session), and
+the dApp pushes a `prepareExecuteAndWait` payment the wallet signs and settles.
+The unit tests cover the transport's offline parts (CAIP encoding, signing); the
+relay round-trip is proven on the iOS and Android wallets, the way `npm run demo`
+is the ledger round-trip.
 
 `npm run wc-signin` is the dApp end only, for a **real phone**: it opens a session,
 prints the `wc:` URI as a scannable terminal QR, and once a Canton wallet pairs
@@ -202,7 +200,7 @@ environment-driven:
 | `REGISTRY_URL` | `…:2000/api/validator/v0/scan-proxy` | token registry |
 | `VALIDATOR_URL` | `http://localhost:2000/api/validator` | validator API |
 | `LEDGER_USER_ID` | `ledger-api-user` | user the dev token authenticates as |
-| `WC_PROJECT_ID` | — | WalletConnect Cloud project id; required for `npm run wc-demo` / `wc-signin` |
+| `WC_PROJECT_ID` | — | WalletConnect Cloud project id; required for `npm run wc-signin` and the storefront's WalletConnect sign-in / one-tap pay |
 | `WC_RELAY_URL` | `wss://relay.walletconnect.org` | WalletConnect relay WebSocket (override for a private relay) |
 
 ## Status and what's next
@@ -225,27 +223,22 @@ environment-driven:
   step, the SDK's external-party pipeline end to end (`keys.generate` →
   `party.external` allocate → `amulet.tap` → `token.transfer.create`, each
   `ledger.prepare` → `sign` → `execute`). Live-verified against LocalNet.
-- **WalletConnect over real CIP-0103 — done, headless and live-verified.** A dApp
-  and a headless wallet pair over the *public* relay and complete the whole loop
-  with no phone (`npm run wc-demo`): Sign-In with Canton runs the **standard
-  CIP-0103** `connect → listAccounts → signMessage` over the session — the exact
-  bare methods the SDK's native wallet answers, so a phone interoperates — then a
-  `canton_requestTransfer` (the non-standard payment convenience) the wallet
-  submits, and the shop settles. `npm run wc-signin` drives that Sign-In against a
-  **real phone**, printing a scannable QR. The CIP-0103 method contract and the
-  CAIP account encoding (Canton parties percent-encoded past WalletConnect's `::`
-  rule) are pinned by these runs and the unit tests. The Android wallet's Reown
-  WalletKit binding + approval UI is built (compiles + release-builds); the live
-  on-device round-trip is the remaining step. The standard **payment** path over
-  WalletConnect (`prepareExecute` with JSON Ledger API commands) is the next
-  slice — it replaces the `canton_requestTransfer` convenience.
+- **WalletConnect over real CIP-0103 — done and live-verified on both phones.**
+  Sign-In with Canton runs the **standard CIP-0103** `connect → listAccounts →
+  signMessage` over the session, and one-tap payment is `prepareExecuteAndWait`:
+  the dApp pushes a prepared Token Standard transfer, and the wallet prepares,
+  verifies the prepared-tx hash, signs in its enclave, and executes — settled
+  on-ledger over a live relay session on both iOS and Android. `npm run wc-signin`
+  drives the Sign-In leg against a **real phone**, printing a scannable QR. The
+  CIP-0103 method contract and the CAIP account encoding (Canton parties
+  percent-encoded past WalletConnect's `::` rule) are pinned by the SDK's Swift +
+  Kotlin tests and this server's unit tests.
 - **Authoritative party→key binding — still open.** Sign-in currently trusts the
   public key the wallet claimed at connect time; binding it to the party's
   on-ledger key is a focused follow-up now that the ledger connection exists.
 - **The wallet↔server transport — two proven options.** Same-device scan-to-pay
-  (built on both phones) and WalletConnect for the public case (headless); the
-  code assumes no particular transport, and the native phone half of
-  WalletConnect is the one remaining piece.
+  and WalletConnect for the public case, both built and live-verified on iOS and
+  Android; the code assumes no particular transport.
 
 ## License
 

@@ -3,19 +3,16 @@
 
 // Offline coverage for the WalletConnect transport's transport-agnostic parts:
 // the CAIP identifier encoding (where Canton party ids collide with WalletConnect
-// rules), the Ed25519 signing helpers (against siwc's own verifier), and the
-// request dispatch (against a fake signer). The live relay round-trip is
-// `npm run wc-demo`, which needs a project id and a running shop + LocalNet — the
-// same way `npm run demo` needs infrastructure the unit tests don't.
+// rules) and the Ed25519 signing helpers (against siwc's own verifier). The
+// responder side of the round-trip — a wallet answering CIP-0103 requests — now
+// lives in the SDK and the two phones; the dApp connector's live relay leg is
+// exercised by `npm run wc-signin` against a real device.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 
 import {
-  CANTON_METHODS,
-  WcRequestError,
-  WC_ERRORS,
   chainId,
   encodePartyAddress,
   decodePartyAddress,
@@ -23,9 +20,6 @@ import {
   partyFromAccount,
 } from '../src/wc/protocol.ts';
 import { publicKeyToSpkiHex, signDomainMessageHex } from '../src/wc/crypto.ts';
-import { dispatchWalletRequest } from '../src/wc/wallet.ts';
-import type { WalletSigner } from '../src/wc/wallet.ts';
-import type { DappAccount } from '../src/wc/protocol.ts';
 import { verifySignature } from '../src/siwc.ts';
 
 // --- CAIP identifiers -------------------------------------------------------
@@ -85,72 +79,4 @@ test('signDomainMessageHex produces a signature siwc verifies (and rejects tampe
   const sig = Buffer.from(signDomainMessageHex(message, privateKey), 'hex');
   assert.equal(verifySignature(message, spkiHex, sig), true);
   assert.equal(verifySignature(message + 'x', spkiHex, sig), false);
-});
-
-// --- request dispatch -------------------------------------------------------
-
-const ACCOUNT: DappAccount = {
-  primary: true,
-  partyId: 'shopper::1220abc',
-  status: 'allocated',
-  hint: 'shopper',
-  publicKey: 'bb22',
-  namespace: '1220abc',
-  networkId: 'canton:localnet',
-  signingProviderId: 'test',
-};
-
-function fakeSigner(): { signer: WalletSigner; transfers: unknown[] } {
-  const transfers: unknown[] = [];
-  const signer: WalletSigner = {
-    account: () => ACCOUNT,
-    async signMessage() {
-      return 'aa11';
-    },
-    async submitTransfer(params) {
-      transfers.push(params);
-      return { updateId: 'update-1' };
-    },
-  };
-  return { signer, transfers };
-}
-
-test('dispatch: connect reports a connected session', async () => {
-  const { signer } = fakeSigner();
-  const result = await dispatchWalletRequest({ method: CANTON_METHODS.connect, params: {} }, signer);
-  assert.deepEqual(result, { isConnected: true, isNetworkConnected: true });
-});
-
-test('dispatch: listAccounts returns the account (with its publicKey)', async () => {
-  const { signer } = fakeSigner();
-  const result = await dispatchWalletRequest({ method: CANTON_METHODS.listAccounts, params: {} }, signer);
-  assert.deepEqual(result, [ACCOUNT]);
-});
-
-test('dispatch: signMessage returns just the signature (real CIP-0103)', async () => {
-  const { signer } = fakeSigner();
-  const result = await dispatchWalletRequest(
-    { method: CANTON_METHODS.signMessage, params: { message: 'hi' } },
-    signer,
-  );
-  assert.deepEqual(result, { signature: 'aa11' });
-});
-
-test('dispatch: canton_requestTransfer submits and returns updateId + sender', async () => {
-  const { signer, transfers } = fakeSigner();
-  const params = { to: 'merchant::1220aa', amount: '12', instrument: 'Amulet', memo: 'order-1' };
-  const result = await dispatchWalletRequest(
-    { method: CANTON_METHODS.requestTransfer, params },
-    signer,
-  );
-  assert.deepEqual(result, { updateId: 'update-1', sender: 'shopper::1220abc' });
-  assert.deepEqual(transfers, [params]);
-});
-
-test('dispatch: an unknown method rejects with the unsupported-method code', async () => {
-  const { signer } = fakeSigner();
-  await assert.rejects(
-    () => dispatchWalletRequest({ method: 'canton_bogus', params: {} }, signer),
-    (e: unknown) => e instanceof WcRequestError && e.code === WC_ERRORS.unsupportedMethod,
-  );
 });

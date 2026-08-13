@@ -15,11 +15,8 @@
 export const CANTON_NAMESPACE = 'canton';
 
 /** The methods this reference carries over a session, as JSON-RPC method names.
- *  The connect/read methods and `signMessage` are **real CIP-0103** (OpenRPC
- *  0.5.0) — the exact bare names the SDK's provider engine answers, so a native
- *  wallet interoperates. `requestTransfer` is the exception: a dApp-server
- *  convenience, because the standard payment path is `prepareExecute` with JSON
- *  Ledger API commands (a separate slice). */
+ *  All are **real CIP-0103** (OpenRPC 0.5.0) — the exact bare names the SDK's
+ *  provider engine answers, so a native wallet interoperates. */
 export const CANTON_METHODS = {
   /** Request a connection; the wallet grants accounts (usually via the user). */
   connect: 'connect',
@@ -39,18 +36,12 @@ export const CANTON_METHODS = {
    *  {@link PrepareSubmission} → {@link ExecutedResult}. This is the standard
    *  Canton one-tap payment (a Token Standard transfer, pushed to the wallet). */
   prepareExecuteAndWait: 'prepareExecuteAndWait',
-  /** NON-STANDARD dApp-server convenience: ask the wallet to build and submit a
-   *  transfer from high-level fields ({@link RequestTransferParams}) — the
-   *  headless demo's payment. A native wallet does not implement this; it pays
-   *  via `prepareExecute`. */
-  requestTransfer: 'canton_requestTransfer',
 } as const;
 
 export type CantonMethod = (typeof CANTON_METHODS)[keyof typeof CANTON_METHODS];
 
 /** Every method a session advertises. A wallet approves only the subset it
- *  supports, so proposing the convenience method alongside the standard CIP-0103
- *  ones is harmless against a wallet that implements only the standard set. */
+ *  supports. */
 export const ALL_METHODS: readonly string[] = Object.values(CANTON_METHODS);
 
 // --- CAIP identifiers -------------------------------------------------------
@@ -157,50 +148,4 @@ export interface DappAccount {
   signingProviderId: string;
 }
 
-/** `canton_requestTransfer` params — the payment the dApp asks the wallet to
- *  make. `shop`/`item` are display-only, for the wallet's approval prompt; the
- *  wallet still owns the keys and decides. */
-export interface RequestTransferParams {
-  /** The recipient party (the merchant). */
-  to: string;
-  /** Decimal amount, e.g. "12". */
-  amount: string;
-  /** Instrument id, e.g. "Amulet". */
-  instrument: string;
-  /** Transfer memo the merchant's watcher matches (usually the order id). */
-  memo: string;
-  /** Display: the shop name shown on the approval prompt. */
-  shop?: string;
-  /** Display: what is being bought. */
-  item?: string;
-}
-
-/** `canton_requestTransfer` result — the on-ledger update the wallet submitted. */
-export interface TransferResult {
-  updateId: string;
-  /** The party that paid (the wallet's own account). */
-  sender: string;
-}
-
-// --- errors -----------------------------------------------------------------
-//
-// CIP-0103 uses EIP-1193 / EIP-1474 error codes. A wallet that declines returns
-// 4001; an unknown method is 4200; anything the wallet failed to carry out is a
-// generic -32000. `WcRequestError` carries the code so the responder can put it
-// straight into the JSON-RPC error response.
-
-export const WC_ERRORS = {
-  userRejected: 4001,
-  unsupportedMethod: 4200,
-  internal: -32000,
-} as const;
-
-export class WcRequestError extends Error {
-  readonly code: number;
-  constructor(code: number, message: string) {
-    super(message);
-    this.name = 'WcRequestError';
-    this.code = code;
-  }
-}
 
