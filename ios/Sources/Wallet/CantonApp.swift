@@ -90,8 +90,7 @@ struct ConnectionFailedView: View {
 enum WalletSection: String, CaseIterable, Identifiable {
     case portfolio = "Portfolio"
     case inbox = "Inbox"
-    case send = "Send"
-    case receive = "Receive"
+    case transfer = "Transfer"
     case history = "History"
     case connect = "Connect"
 
@@ -100,8 +99,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
         switch self {
         case .portfolio: "creditcard"
         case .inbox: "tray"
-        case .send: "paperplane"
-        case .receive: "qrcode"
+        case .transfer: "arrow.left.arrow.right"
         case .history: "clock"
         case .connect: "link"
         }
@@ -142,12 +140,9 @@ struct WalletTabsView: View {
                         .tabItem { Label("Inbox", systemImage: "tray") }
                         .badge(model.inbox.count)
                         .tag(WalletSection.inbox)
-                    SendView()
-                        .tabItem { Label("Send", systemImage: "paperplane") }
-                        .tag(WalletSection.send)
-                    ReceiveView()
-                        .tabItem { Label("Receive", systemImage: "qrcode") }
-                        .tag(WalletSection.receive)
+                    TransferView()
+                        .tabItem { Label("Transfer", systemImage: "arrow.left.arrow.right") }
+                        .tag(WalletSection.transfer)
                     HistoryView()
                         .tabItem { Label("History", systemImage: "clock") }
                         .tag(WalletSection.history)
@@ -158,9 +153,9 @@ struct WalletTabsView: View {
             }
         }
         .task { await autoRefresh() }
-        // A checkout deep link routes straight to Send, where it's prefilled.
+        // A checkout deep link routes straight to Transfer (its Send page prefills).
         .onChange(of: model.pendingCheckoutUrl) { _, url in
-            if url != nil { section = .send }
+            if url != nil { section = .transfer }
         }
         // The WalletConnect approval sheet, mounted once above the shell so it
         // rises over any tab. Dismissing it (swipe) rejects the request.
@@ -179,8 +174,7 @@ struct WalletTabsView: View {
         switch section {
         case .portfolio: PortfolioView()
         case .inbox: InboxView()
-        case .send: SendView()
-        case .receive: ReceiveView()
+        case .transfer: TransferView()
         case .history: HistoryView()
         case .connect: ConnectView()
         }
@@ -473,6 +467,42 @@ struct InboxView: View {
     }
 }
 
+/// The Transfer tab: one screen with a segmented control paging between Send and
+/// Receive — the iOS twin of Android's combined Transfer nav item. Owns the
+/// single NavigationStack; SendView/ReceiveView render as its content.
+struct TransferView: View {
+    enum Page: String, CaseIterable, Identifiable {
+        case send = "Send"
+        case receive = "Receive"
+        var id: String { rawValue }
+    }
+
+    @Environment(WalletModel.self) private var model
+    @State private var page: Page = .send
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Transfer", selection: $page) {
+                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding([.horizontal, .top])
+                switch page {
+                case .send: SendView()
+                case .receive: ReceiveView()
+                }
+            }
+            .navigationTitle("Transfer")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        // A checkout deep link prefills on the Send page — switch to it.
+        .onChange(of: model.pendingCheckoutUrl) { _, url in
+            if url != nil { page = .send }
+        }
+    }
+}
+
 struct SendView: View {
     @Environment(WalletModel.self) private var model
     @State private var receiver = ""
@@ -491,8 +521,7 @@ struct SendView: View {
 
     var body: some View {
         @Bindable var model = model
-        NavigationStack {
-            Form {
+        Form {
                 if let note = checkoutNote {
                     Section("Reviewing checkout") {
                         Text(note)
@@ -555,7 +584,6 @@ struct SendView: View {
                         || Decimal(string: amount) == nil
                 )
             }
-            .navigationTitle("Send")
             // Clear the form once a send succeeds (the receipt sheet appears).
             // Kept until then so a failed send leaves the inputs to retry.
             .onChange(of: model.lastSend?.id) { _, newId in
@@ -583,7 +611,6 @@ struct SendView: View {
                     model.clearPendingCheckout()
                 }
             }
-        }
     }
 
     private func handleScanned(_ raw: String) {
@@ -629,8 +656,7 @@ struct ReceiveView: View {
     @Environment(WalletModel.self) private var model
 
     var body: some View {
-        NavigationStack {
-            Form {
+        Form {
                 Section {
                     receiveCard
                         .frame(maxWidth: .infinity)
@@ -638,8 +664,6 @@ struct ReceiveView: View {
                 }
                 InstantReceiveSection()
             }
-            .navigationTitle("Receive")
-        }
     }
 
     private var receiveCard: some View {
