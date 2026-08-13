@@ -125,20 +125,31 @@ export class Ledger {
  * amount/instrument when a direct (preapproved) receive carries no instruction.
  */
 function extractIncoming(tx: any, event: any, party: string): IncomingPayment | null {
+  const label = event?.label;
   const transfer = event?.transferInstruction?.transfer;
   const summary = event?.unlockedHoldingsChangeSummaries?.[0];
   const instrument = transfer?.instrumentId ?? summary?.instrumentId;
   const amount = transfer?.amount ?? summary?.amountChange ?? summary?.outputAmount;
   if (instrument == null || amount == null) return null;
-  const memo = transfer?.meta?.values?.[MEMO_KEY];
+  // The transfer memo is the parsed `reason` on the label — present whether the
+  // transfer settled directly (preapproved, no instruction) or via an
+  // offer→accept instruction. The instruction's transfer meta is a fallback.
+  const reason = label?.reason;
+  const metaMemo = transfer?.meta?.values?.[MEMO_KEY];
+  const memo =
+    typeof reason === 'string' && reason !== ''
+      ? reason
+      : typeof metaMemo === 'string' && metaMemo !== ''
+        ? metaMemo
+        : undefined;
   return {
     updateId: String(tx.updateId ?? ''),
     offset: Number(tx.offset ?? 0),
     recordTime: String(tx.recordTime ?? ''),
-    sender: String(event?.label?.sender ?? transfer?.sender ?? ''),
+    sender: String(label?.sender ?? transfer?.sender ?? ''),
     receiver: String(transfer?.receiver ?? party),
     amount: String(amount),
     instrument: { admin: String(instrument.admin ?? ''), id: String(instrument.id ?? '') },
-    memo: typeof memo === 'string' ? memo : undefined,
+    memo,
   };
 }
