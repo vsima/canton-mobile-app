@@ -30,10 +30,23 @@ struct WalletRootView: View {
                 ConnectionFailedView(message: message)
             }
         }
-        .task { await model.onboard() }
-        // A canton-checkout: URL (from the Camera / a QR scanner) → the Send
-        // view picks it up, routes there, and prefills.
-        .onOpenURL { url in model.requestCheckout(url.absoluteString) }
+        .task {
+            // Reown must be configured before onboarding registers the dApp
+            // session with it. Non-secret WalletConnect project id (a public
+            // client key), same as the Android twin.
+            WalletConnectController.shared.configure(projectId: "cbef3d23404e895fdc178fadcf6798c1")
+            await model.onboard()
+        }
+        // A wc: pairing link opens a WalletConnect session; a canton-checkout:
+        // URL routes to Send to prefill. Anything else is ignored.
+        .onOpenURL { url in
+            let raw = url.absoluteString
+            if raw.hasPrefix("wc:") {
+                model.pairWalletConnect(raw)
+            } else if raw.hasPrefix("canton-checkout:") {
+                model.requestCheckout(raw)
+            }
+        }
     }
 }
 
@@ -80,6 +93,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
     case send = "Send"
     case receive = "Receive"
     case history = "History"
+    case connect = "Connect"
 
     var id: String { rawValue }
     var icon: String {
@@ -89,6 +103,7 @@ enum WalletSection: String, CaseIterable, Identifiable {
         case .send: "paperplane"
         case .receive: "qrcode"
         case .history: "clock"
+        case .connect: "link"
         }
     }
 }
@@ -136,6 +151,9 @@ struct WalletTabsView: View {
                     HistoryView()
                         .tabItem { Label("History", systemImage: "clock") }
                         .tag(WalletSection.history)
+                    ConnectView()
+                        .tabItem { Label("Connect", systemImage: "link") }
+                        .tag(WalletSection.connect)
                 }
             }
         }
@@ -143,6 +161,16 @@ struct WalletTabsView: View {
         // A checkout deep link routes straight to Send, where it's prefilled.
         .onChange(of: model.pendingCheckoutUrl) { _, url in
             if url != nil { section = .send }
+        }
+        // The WalletConnect approval sheet, mounted once above the shell so it
+        // rises over any tab. Dismissing it (swipe) rejects the request.
+        .sheet(item: Binding(
+            get: { model.pendingApproval },
+            set: { newValue in
+                if newValue == nil { model.pendingApproval?.resolve(.rejected(reason: "Dismissed")) }
+            }
+        )) { approval in
+            WcApprovalSheet(approval: approval)
         }
     }
 
@@ -154,6 +182,7 @@ struct WalletTabsView: View {
         case .send: SendView()
         case .receive: ReceiveView()
         case .history: HistoryView()
+        case .connect: ConnectView()
         }
     }
 

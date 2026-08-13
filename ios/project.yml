@@ -14,6 +14,12 @@ packages:
     # Sibling checkout of vsima/canton-mobile-sdk, so the apps always build
     # against the SDK working tree. CI reproduces the same layout.
     path: ../../canton-mobile-sdk
+  reown-swift:
+    # Reown WalletKit — the WalletConnect relay client, wallet side. Only the
+    # CantonWallet target links it; the SDK's CantonDappWCKit adapter stays
+    # client-free, exactly like the Kotlin canton-dapp-wc module.
+    url: https://github.com/reown-com/reown-swift
+    from: 1.8.0
 targets:
   CantonWallet:
     type: application
@@ -29,6 +35,17 @@ targets:
       # generated Ledger API protos directly.
       - package: canton-mobile-sdk
         product: CantonLedgerAPI
+      # dApp-connect over WalletConnect: the provider engine + prepareExecute
+      # pipeline (CantonDappWalletKit), the CIP-0103 WalletConnect adapter
+      # (CantonDappWCKit), and the Reown relay client that moves the frames.
+      - package: canton-mobile-sdk
+        product: CantonDappWalletKit
+      - package: canton-mobile-sdk
+        product: CantonDappWCKit
+      - package: reown-swift
+        product: ReownWalletKit
+      - package: reown-swift
+        product: WalletConnectNetworking
     info:
       path: Wallet-Info.plist
       properties:
@@ -44,11 +61,15 @@ targets:
             localhost:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
-        # A canton-checkout: QR opens the wallet (Camera / any QR scanner).
+        # canton-checkout: opens the wallet from a QR; canton-wallet:// is the
+        # WalletConnect redirect a dApp uses to return here after approval.
         CFBundleURLTypes:
           - CFBundleURLName: io.github.vsima.canton.app.checkout
             CFBundleURLSchemes:
               - canton-checkout
+          - CFBundleURLName: io.github.vsima.canton.app.walletconnect
+            CFBundleURLSchemes:
+              - canton-wallet
     settings:
       base:
         # Unchanged from the single-app layout: the installed wallet keeps its
