@@ -1172,6 +1172,7 @@ private fun java.math.BigDecimal.cc(): String = ccFormat.format(this)
 private fun ConnectScreen(model: WalletModel) {
     var uri by remember { mutableStateOf("") }
     val context = LocalContext.current
+    LaunchedEffect(Unit) { model.refreshWcSessions() }
     Column(
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1217,6 +1218,39 @@ private fun ConnectScreen(model: WalletModel) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp),
             )
+        }
+        if (model.wcSessions.isNotEmpty()) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            SectionHeader("Connected dApps")
+            model.wcSessions.forEach { session ->
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(session.name, style = MaterialTheme.typography.bodyLarge)
+                            if (session.url.isNotBlank()) {
+                                Text(
+                                    session.url,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                "session ${session.topic.take(10)}…",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(
+                            onClick = { model.disconnectWcSession(session.topic) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) { Text("Disconnect") }
+                    }
+                }
+            }
         }
     }
 }

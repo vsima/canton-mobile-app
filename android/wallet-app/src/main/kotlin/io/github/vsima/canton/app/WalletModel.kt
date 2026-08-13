@@ -218,6 +218,10 @@ class WalletModel(
     /** Last WalletConnect status line, shown on the Connect screen. */
     var wcStatus by mutableStateOf<String?>(null)
         private set
+
+    /** Active WalletConnect sessions, shown on the Connect screen. */
+    var wcSessions by mutableStateOf<List<WcSessionInfo>>(emptyList())
+        private set
     /** A checkout URL delivered by a `canton-checkout:` deep link, awaiting the
      *  Send screen to fetch and prefill it. */
     var pendingCheckoutUrl by mutableStateOf<String?>(null)
@@ -844,7 +848,9 @@ class WalletModel(
         val adapter = CantonWalletConnect(session, DAPP_NETWORK_ID)
         cantonWc = adapter
         WalletConnectController.onStatus = { line -> scope.launch { wcStatus = line } }
+        WalletConnectController.onSessions = { list -> scope.launch { wcSessions = list } }
         WalletConnectController.register(adapter, accounts = { dappAccounts() })
+        WalletConnectController.refreshSessions()
         Log.i("WALLET", "WalletConnect enabled for ${partyId?.take(24)}…")
     }
 
@@ -853,6 +859,12 @@ class WalletModel(
         wcStatus = "Pairing…"
         WalletConnectController.pair(uri.trim())
     }
+
+    /** Refresh the active WalletConnect sessions (called when the Connect screen opens). */
+    fun refreshWcSessions() = WalletConnectController.refreshSessions()
+
+    /** Disconnect a WalletConnect session by topic. */
+    fun disconnectWcSession(topic: String) = WalletConnectController.disconnect(topic)
 
     private fun ByteArray.toHex(): String =
         joinToString("") { byte -> "%02x".format(byte.toInt() and 0xFF) }

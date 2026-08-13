@@ -34,6 +34,9 @@ import kotlinx.serialization.json.Json
  * on an IO scope; the engine's approval delegate hops to Main to raise the
  * sheet.
  */
+/** A live WalletConnect session, for display on the Connect screen. */
+data class WcSessionInfo(val topic: String, val name: String, val url: String)
+
 object WalletConnectController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var adapter: CantonWalletConnect? = null
@@ -42,10 +45,35 @@ object WalletConnectController {
     /** Set by [WalletModel] to surface status lines on the Connect screen. */
     var onStatus: ((String) -> Unit)? = null
 
+    /** Set by [WalletModel] to surface the active sessions on the Connect screen. */
+    var onSessions: ((List<WcSessionInfo>) -> Unit)? = null
+
     /** Registers the wallet's adapter + the accounts it may share. */
     fun register(adapter: CantonWalletConnect, accounts: suspend () -> List<DappWallet>) {
         this.adapter = adapter
         this.accounts = accounts
+    }
+
+    /** Reads WalletKit's active sessions and pushes them to the UI. */
+    fun refreshSessions() {
+        val sessions = try {
+            WalletKit.getListOfActiveSessions().map { s ->
+                WcSessionInfo(topic = s.topic, name = s.metaData?.name ?: "dApp", url = s.metaData?.url ?: "")
+            }
+        } catch (e: Throwable) {
+            Log.i("WALLET", "WC: getListOfActiveSessions failed: $e")
+            emptyList()
+        }
+        onSessions?.invoke(sessions)
+    }
+
+    /** Disconnects a session by topic. */
+    fun disconnect(topic: String) {
+        WalletKit.disconnectSession(
+            Wallet.Params.SessionDisconnect(sessionTopic = topic),
+            onSuccess = { refreshSessions() },
+            onError = { error -> status("Disconnect failed: ${error.throwable.message}") },
+        )
     }
 
     /** Hands a `wc:` pairing URI to the relay. */
@@ -78,7 +106,10 @@ object WalletConnectController {
                         proposerPublicKey = proposal.proposerPublicKey,
                         namespaces = namespaces,
                     ),
-                    onSuccess = { status("Connected to ${proposal.name.ifBlank { "dApp" }}") },
+                    onSuccess = {
+                        status("Connected to ${proposal.name.ifBlank { "dApp" }}")
+                        refreshSessions()
+                    },
                     onError = { error -> status("Approve failed: ${error.throwable.message}") },
                 )
             } catch (e: Exception) {
@@ -173,7 +204,9 @@ class WalletApplication : Application() {
         override val onSessionAuthenticate:
             ((Wallet.Model.SessionAuthenticate, Wallet.Model.VerifyContext) -> Unit)? = null
 
-        override fun onSessionDelete(sessionDelete: Wallet.Model.SessionDelete) {}
+        override fun onSessionDelete(sessionDelete: Wallet.Model.SessionDelete) {
+            WalletConnectController.refreshSessions()
+        }
         override fun onSessionExtend(session: Wallet.Model.Session) {}
         override fun onSessionSettleResponse(response: Wallet.Model.SettledSessionResponse) {}
         override fun onSessionUpdateResponse(response: Wallet.Model.SessionUpdateResponse) {}
