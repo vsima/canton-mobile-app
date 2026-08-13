@@ -11,8 +11,10 @@ import express, { type Request, type Response } from 'express';
 import { loadConfig, type Config } from './config.ts';
 import { NonceStore } from './nonceStore.ts';
 import { buildSignInMessage, verifySignIn } from './siwc.ts';
+import QRCode from 'qrcode';
 import { OrderBook } from './orders.ts';
 import { CATALOG, checkout } from './shop.ts';
+import { checkoutUri, checkoutView } from './checkout.ts';
 import { storefrontHtml } from './storefront.ts';
 
 /** RFC 3339 UTC with no sub-second component, as the sign-in template wants. */
@@ -30,7 +32,9 @@ export function createApp(
 
   // The storefront — the dApp's own frontend, served by its backend.
   app.get('/', (_req: Request, res: Response) => {
-    res.type('html').send(storefrontHtml({ merchantParty: config.merchantParty, networkId: config.networkId }));
+    res.type('html').send(
+      storefrontHtml({ shop: config.shopName, merchantParty: config.merchantParty, networkId: config.networkId }),
+    );
   });
 
   app.get('/health', (_req: Request, res: Response) => {
@@ -106,8 +110,9 @@ export function createApp(
   });
 
   // Buy a product: creates a payable order priced in Canton Coin, to the
-  // merchant party, referenced by the order id in its memo.
-  app.post('/shop/checkout', (req: Request, res: Response) => {
+  // merchant party, referenced by the order id in its memo. Returns a checkout
+  // QR the wallet scans to fetch and review the order.
+  app.post('/shop/checkout', async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const productId = body['productId'];
     if (typeof productId !== 'string') {
@@ -118,14 +123,26 @@ export function createApp(
     }
     try {
       const { product, order } = checkout(productId, config.merchantParty, orders);
+      const uri = checkoutUri(config.publicUrl, order.id);
+      const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
       res.status(201).json({
         product,
         order,
         payment: { payTo: order.payTo, amount: order.amount, instrumentId: order.instrumentId ?? null, memo: order.memo },
+        checkout: { uri, qrSvg },
       });
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });
     }
+  });
+
+  // The reproduced checkout a wallet fetches after scanning the QR: what's
+  // being bought, for how much, to whom, and referencing which memo.
+  app.get('/checkout/:id', (req: Request, res: Response) => {
+    const id = req.params['id'];
+    const order = typeof id === 'string' ? orders.get(id) : undefined;
+    if (order === undefined) return res.status(404).json({ error: 'no such checkout' });
+    res.json(checkoutView(order, config.shopName));
   });
 
   // --- Merchant orders (settled by the ledger watcher) ---------------------

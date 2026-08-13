@@ -34,23 +34,36 @@ wallet's `listAccounts` publishes. It is bound to the nonce at challenge time,
 so `/siwc/verify` checks the signature against that key rather than trusting one
 from the verify request. `signature` is hex.
 
-### Storefront — a shop over the order book
+### Storefront — a shop, with scan-to-pay
 
-A browsable shop, the dApp's own frontend served by its backend. Buy a
-product and the page shows what to pay — amount, party, memo — then polls the
-order until the ledger watcher settles it and flips to **Paid ✓**. This is the
-demo: open it, buy a coffee, pay from a Canton wallet, watch it settle.
+A browsable shop, the dApp's own frontend served by its backend. Buy a product
+and the checkout screen shows a **QR the wallet scans to fetch and review the
+order**, then pay; the page polls until the ledger watcher settles it and flips
+to **Paid ✓**. This is the demo: open it, buy a coffee, scan with a Canton
+wallet, pay, watch it settle.
 
 | Method | Path | Result |
 |---|---|---|
 | `GET`  | `/` | the storefront page (self-contained HTML) |
 | `GET`  | `/shop` | `{ products }` — the catalog |
-| `POST` | `/shop/checkout` | `{ productId }` → `201 { product, order, payment }` |
+| `POST` | `/shop/checkout` | `{ productId }` → `201 { product, order, payment, checkout }` |
+| `GET`  | `/checkout/:id` | the reproduced checkout a wallet fetches for review |
+
+**The order-fetch flow.** Checkout returns `checkout.qrSvg`, a QR encoding
+`canton-checkout:<PUBLIC_URL>/checkout/<id>`. The wallet scans it, `GET`s that
+URL for the reproduced order (shop, item, amount, party, memo), shows it for
+review, and pays. The web confirms by watching the ledger. Canton has no
+payment-URI standard (the CIPs define none), so `canton-checkout:` is a small
+convention of this reference — the scheme only marks the QR; the URL is where
+the wallet reads the order. The customer's wallet still approves and sends, so
+an untrusted QR can mislead a prefill but cannot move funds.
 
 Checkout creates an order priced in Canton Coin, payable to `MERCHANT_PARTY`.
 Set that party (and point at a running LocalNet) for the shop to be payable
 and to auto-settle; the party should accept incoming transfers directly
 (instant receiving / preapproval) so a payment settles without a manual accept.
+For a phone to reach the QR's URL, set `PUBLIC_URL` to a LAN address, not
+`localhost`.
 
 ### Merchant orders — ledger watch and settle
 
@@ -115,6 +128,8 @@ environment-driven:
 | `DAPP_NETWORK_ID` | `canton:localnet` | CAIP-2 network id |
 | `SIWC_NONCE_TTL_SECONDS` | `300` | how long a challenge stays valid |
 | `SIWC_CLOCK_SKEW_SECONDS` | `60` | tolerance on `Issued At` / `Expiration Time` |
+| `SHOP_NAME` | `Canton Corner` | shop name shown on the page and when a wallet reviews a checkout |
+| `PUBLIC_URL` | `http://localhost:$PORT` | base URL baked into the checkout QR; use a LAN address for a real phone |
 | `MERCHANT_PARTY` | — | the party the watcher settles orders against; unset = no auto-settle |
 | `WATCH_INTERVAL_MS` | `4000` | how often the watcher polls for new payments |
 | `LEDGER_URL` | `http://localhost:2975/` | JSON Ledger API of the merchant party's participant |
@@ -131,9 +146,11 @@ environment-driven:
   on-ledger payments (real sender, amount, and memo), and the "watch from now"
   cursor is confirmed not to replay historical payments. Order matching is unit
   tested.
-- **Storefront — done.** Catalog, checkout, and a self-contained page that polls
-  to Paid; served + walked through live against LocalNet. The customer pays from
-  a real Canton wallet.
+- **Storefront + scan-to-pay — done.** Catalog, checkout, a self-contained page,
+  and the order-fetch QR flow: the wallet scans, fetches `/checkout/:id`, reviews
+  the order, and pays; the page polls to Paid. The wallet side (scan → fetch →
+  review → prefill Send) is built on both iOS and Android. Server verified live;
+  the wallet fetch is a plain `GET` of the checkout JSON.
 - **Headless demo (`npm run demo`) — next.** A simulated customer that allocates
   and funds a party via the SDK, buys a product, and pays it — so the whole shop
   loop runs end-to-end with one command and no phone. This is the "fresh

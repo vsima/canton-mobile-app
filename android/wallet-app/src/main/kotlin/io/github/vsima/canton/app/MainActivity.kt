@@ -624,6 +624,9 @@ private fun SendScreen(model: WalletModel) {
     var receiver by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
     var memo by remember { mutableStateOf("") }
+    // Set when a `canton-checkout:` QR is scanned — the dApp order being paid.
+    var checkoutNote by remember { mutableStateOf<String?>(null) }
+    val scanScope = rememberCoroutineScope()
 
     // Prewarm/refresh the cached fee config as the amount changes; the
     // estimate itself recomputes from cache — no network call per keystroke.
@@ -634,6 +637,21 @@ private fun SendScreen(model: WalletModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         val context = LocalContext.current
+        checkoutNote?.let { note ->
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        "Reviewing checkout",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(note, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
         OutlinedTextField(
             value = receiver,
             onValueChange = { receiver = it },
@@ -648,7 +666,31 @@ private fun SendScreen(model: WalletModel) {
                         .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                         .build()
                     GmsBarcodeScanning.getClient(context, options).startScan()
-                        .addOnSuccessListener { code -> code.rawValue?.let { receiver = it.trim() } }
+                        .addOnSuccessListener { code ->
+                            code.rawValue?.let { raw ->
+                                val scanned = raw.trim()
+                                if (scanned.startsWith("canton-checkout:")) {
+                                    // A dApp checkout QR: fetch it, review it, prefill the form.
+                                    val url = scanned.removePrefix("canton-checkout:")
+                                    scanScope.launch {
+                                        val info = model.fetchCheckout(url)
+                                        if (info != null) {
+                                            receiver = info.payTo
+                                            amount = info.amount
+                                            memo = info.memo
+                                            checkoutNote = listOfNotNull(
+                                                info.shop.ifBlank { null }, info.item,
+                                            ).joinToString(" · ")
+                                        } else {
+                                            checkoutNote = "Couldn't load that checkout."
+                                        }
+                                    }
+                                } else {
+                                    receiver = scanned
+                                    checkoutNote = null
+                                }
+                            }
+                        }
                         .addOnFailureListener {
                             Log.i("WALLET", "scan failed: $it")
                             android.widget.Toast.makeText(

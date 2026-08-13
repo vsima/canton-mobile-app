@@ -43,6 +43,11 @@ export interface CheckoutResult {
 export function checkout(productId: string, merchantParty: string, orders: OrderBook): CheckoutResult {
   const product = findProduct(productId);
   if (product === undefined) throw new Error(`no such product: ${productId}`);
-  const order = orders.create({ payTo: merchantParty, amount: product.priceCc, instrumentId: INSTRUMENT_ID });
+  const order = orders.create({
+    payTo: merchantParty,
+    amount: product.priceCc,
+    instrumentId: INSTRUMENT_ID,
+    description: `${product.emoji} ${product.name}`,
+  });
   return { product, order };
 }

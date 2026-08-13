@@ -435,6 +435,8 @@ struct SendView: View {
     @State private var amount = ""
     @State private var memo = ""
     @State private var showScanner = false
+    // Set when a `canton-checkout:` QR is scanned — the dApp order being paid.
+    @State private var checkoutNote: String?
 
     /// Estimated network fee for the typed amount — nil (row hidden) until
     /// the amount parses positive and the cached scan config is available.
@@ -447,6 +449,11 @@ struct SendView: View {
         @Bindable var model = model
         NavigationStack {
             Form {
+                if let note = checkoutNote {
+                    Section("Reviewing checkout") {
+                        Text(note)
+                    }
+                }
                 Section("To") {
                     HStack(alignment: .top) {
                         TextField("party id", text: $receiver, axis: .vertical)
@@ -515,7 +522,30 @@ struct SendView: View {
                 SendConfirmationView(receipt: receipt)
             }
             .sheet(isPresented: $showScanner) {
-                QRScannerSheet { receiver = $0 }
+                QRScannerSheet { handleScanned($0) }
+            }
+        }
+    }
+
+    /// A raw scan: a `canton-checkout:` QR fetches and reviews the dApp order
+    /// and prefills the form; anything else is treated as a recipient party id.
+    private func handleScanned(_ raw: String) {
+        let scanned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard scanned.hasPrefix("canton-checkout:") else {
+            receiver = scanned
+            checkoutNote = nil
+            return
+        }
+        let url = String(scanned.dropFirst("canton-checkout:".count))
+        Task { @MainActor in
+            if let info = await model.fetchCheckout(url) {
+                receiver = info.payTo
+                amount = info.amount
+                memo = info.memo
+                checkoutNote = [info.shop.isEmpty ? nil : info.shop, info.item]
+                    .compactMap { $0 }.joined(separator: " · ")
+            } else {
+                checkoutNote = "Couldn't load that checkout."
             }
         }
     }

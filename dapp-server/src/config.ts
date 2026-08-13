@@ -20,6 +20,13 @@ export interface Config {
   /** Clock tolerance when checking `Issued At` / `Expiration Time`. */
   clockSkewSeconds: number;
 
+  /** The shop's display name, shown when a wallet reviews a checkout. */
+  shopName: string;
+  /** The base URL a wallet can reach this server at — baked into the checkout
+   *  QR. Must be reachable from the phone (a LAN address, not localhost, for a
+   *  real device). */
+  publicUrl: string;
+
   /** The merchant party the ledger watcher settles orders against. When unset,
    *  orders still work but nothing auto-settles (no party to watch). */
   merchantParty?: string;
@@ -59,6 +66,8 @@ export function loadConfig(): Config {
     networkId: str('DAPP_NETWORK_ID', 'canton:localnet'),
     nonceTtlSeconds: int('SIWC_NONCE_TTL_SECONDS', 300),
     clockSkewSeconds: int('SIWC_CLOCK_SKEW_SECONDS', 60),
+    shopName: str('SHOP_NAME', 'Canton Corner'),
+    publicUrl: str('PUBLIC_URL', `http://localhost:${port}`),
     ...(merchantParty !== undefined && merchantParty !== '' ? { merchantParty } : {}),
     watchIntervalMs: int('WATCH_INTERVAL_MS', 4000),
     // LocalNet defaults (the SDK's localNetStaticConfig values).
