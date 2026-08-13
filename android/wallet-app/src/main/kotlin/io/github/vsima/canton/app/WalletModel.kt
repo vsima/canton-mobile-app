@@ -53,6 +53,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -127,6 +128,19 @@ object WalletEnvironment {
     }
 }
 
+/** A dApp checkout fetched from a `canton-checkout:` QR — what's being bought,
+ *  for how much, to whom, referencing which memo. Shown for review, then used
+ *  to prefill the Send form. */
+data class CheckoutInfo(
+    val shop: String,
+    val item: String?,
+    val amount: String,
+    val instrumentId: String?,
+    val payTo: String,
+    val memo: String,
+    val status: String,
+)
+
 /** Mirror of the iOS WalletModel, on Compose state. `WALLET:` logcat lines
  *  drive the same headless verification loop. */
 class WalletModel(
@@ -187,6 +201,37 @@ class WalletModel(
         val memo: String,
         val at: java.time.Instant = java.time.Instant.now(),
     )
+
+    /**
+     * Fetches a dApp checkout the Send screen's scanner read from a
+     * `canton-checkout:` QR, so the wallet can reproduce it for review before
+     * paying. The fetched fields only prefill the form — the user still
+     * reviews and sends — so an untrusted URL can mislead the prefill but not
+     * move funds without approval.
+     */
+    suspend fun fetchCheckout(url: String): CheckoutInfo? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val request = okhttp3.Request.Builder().url(url).build()
+                val body = WalletEnvironment.http.newCall(request).execute()
+                    .use { it.body?.string() } ?: return@withContext null
+                val json = kotlinx.serialization.json.Json.parseToJsonElement(body)
+                    as? JsonObject ?: return@withContext null
+                fun field(key: String): String? = (json[key] as? JsonPrimitive)?.contentOrNull
+                CheckoutInfo(
+                    shop = field("shop") ?: "",
+                    item = field("item"),
+                    amount = field("amount") ?: return@withContext null,
+                    instrumentId = field("instrumentId"),
+                    payTo = field("payTo") ?: return@withContext null,
+                    memo = field("memo") ?: return@withContext null,
+                    status = field("status") ?: "",
+                )
+            } catch (error: Exception) {
+                Log.i("WALLET", "fetchCheckout failed: $error")
+                null
+            }
+        }
 
     private var channel: ManagedChannel? = null
     private var authedChannel: Channel? = null

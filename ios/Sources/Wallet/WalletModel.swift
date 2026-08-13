@@ -13,6 +13,19 @@ import Observation
 ///
 /// Progress is also printed as `WALLET:` lines so the demo loop can be
 /// driven and verified headlessly (`xcrun simctl launch --console`).
+/// A dApp checkout fetched from a `canton-checkout:` QR — what's being bought,
+/// for how much, to whom, referencing which memo. Shown for review, then used
+/// to prefill the Send form.
+struct CheckoutInfo {
+    let shop: String
+    let item: String?
+    let amount: String
+    let instrumentId: String?
+    let payTo: String
+    let memo: String
+    let status: String
+}
+
 @Observable
 @MainActor
 final class WalletModel {
@@ -176,6 +189,32 @@ final class WalletModel {
         let receiver: String
         let memo: String
         let at: Date
+    }
+
+    /// Fetches a dApp checkout the Send scanner read from a `canton-checkout:`
+    /// QR, so the wallet can reproduce it for review before paying. The fetched
+    /// fields only prefill the form — the user still reviews and sends — so an
+    /// untrusted URL can mislead the prefill but not move funds without approval.
+    func fetchCheckout(_ urlString: String) async -> CheckoutInfo? {
+        guard let url = URL(string: urlString) else { return nil }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            func str(_ key: String) -> String? { json[key] as? String }
+            guard let payTo = str("payTo"), let amount = str("amount"), let memo = str("memo") else { return nil }
+            return CheckoutInfo(
+                shop: str("shop") ?? "",
+                item: str("item"),
+                amount: amount,
+                instrumentId: str("instrumentId"),
+                payTo: payTo,
+                memo: memo,
+                status: str("status") ?? ""
+            )
+        } catch {
+            print("WALLET: fetchCheckout failed: \(error)")
+            return nil
+        }
     }
 
     /// Sends Amulet to another party (two-step unless they're preapproved).

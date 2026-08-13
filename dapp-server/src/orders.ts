@@ -17,6 +17,8 @@ export interface Order {
   amount: string;
   /** If set, the payment's instrument id (e.g. `Amulet`) must match. */
   instrumentId?: string;
+  /** A human label for what's being bought — shown when the wallet reviews it. */
+  description?: string;
   /** What the payer must reference in the transfer memo; defaults to the id. */
   memo: string;
   status: 'pending' | 'settled';
@@ -30,6 +32,7 @@ export interface CreateOrder {
   payTo: string;
   amount: string;
   instrumentId?: string;
+  description?: string;
   memo?: string;
 }
 
@@ -56,6 +59,7 @@ export class OrderBook {
       payTo: input.payTo,
       amount: input.amount,
       ...(input.instrumentId !== undefined ? { instrumentId: input.instrumentId } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
       memo: input.memo !== undefined && input.memo !== '' ? input.memo : id,
       status: 'pending',
       createdAt: now.toISOString(),

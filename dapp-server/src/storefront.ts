@@ -1,18 +1,23 @@
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
-// The storefront page — the dApp's frontend, served by its own backend. Browse
-// the catalog, buy, and the page shows what to pay and polls the order until
-// the ledger watcher settles it. Self-contained (no external assets), so it
-// works offline next to LocalNet.
+// The storefront page — the dApp's frontend, served by its backend. Browse the
+// catalog, buy, and the page shows a checkout QR: scan it with a Canton wallet
+// to fetch and review the order, then pay. The page polls the order until the
+// ledger watcher settles it. Self-contained (no external assets).
 
 export interface StorefrontOptions {
+  shop: string;
   merchantParty?: string;
   networkId: string;
 }
 
 export function storefrontHtml(options: StorefrontOptions): string {
-  const config = JSON.stringify({ merchantParty: options.merchantParty ?? null, networkId: options.networkId });
+  const config = JSON.stringify({
+    shop: options.shop,
+    merchantParty: options.merchantParty ?? null,
+    networkId: options.networkId,
+  });
   // The client script below uses string concatenation, not template literals,
   // so it carries no `${...}` that this outer template would try to interpolate.
   return `<!doctype html>
@@ -40,19 +45,22 @@ export function storefrontHtml(options: StorefrontOptions): string {
   button:disabled { opacity:.5; cursor:default; }
   .pay { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; }
   .pay h2 { margin:0 0 4px; }
-  .row { display:flex; align-items:center; gap:8px; margin:10px 0; }
-  .row .k { color:var(--muted); width:76px; flex:none; font-size:.85rem; }
-  .row .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.82rem; word-break:break-all; }
+  .qr { text-align:center; margin:14px 0; }
+  .qr svg { width:220px; height:220px; background:#fff; border-radius:12px; padding:10px; }
+  .muted { color:var(--muted); font-size:.8rem; margin-top:10px; }
+  .row { display:flex; align-items:center; gap:8px; margin:8px 0; }
+  .row .k { color:var(--muted); width:70px; flex:none; font-size:.85rem; }
+  .row .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; word-break:break-all; }
   .status { margin-top:16px; padding:12px; border-radius:10px; background:rgba(59,91,219,.08); text-align:center; }
   .status.paid { background:rgba(46,125,50,.12); color:var(--ok); font-weight:600; }
   .note { background:var(--card); border:1px dashed var(--line); border-radius:12px; padding:16px; color:var(--muted); font-size:.9rem; }
-  a { color:var(--accent); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 </style>
 </head>
 <body>
 <header>
-  <h1>🛍️ Canton Corner</h1>
-  <p>A reference dApp shop — pay from your Canton wallet, settled on-ledger.</p>
+  <h1 id="shopname">🛍️ Canton Corner</h1>
+  <p>A reference dApp shop — scan to pay from your Canton wallet, settled on-ledger.</p>
 </header>
 <main id="app"><p>Loading…</p></main>
 <script>
@@ -104,20 +112,24 @@ function checkout(productId) {
     .then(function (r) { return r.json(); })
     .then(function (data) {
       if (data.error) { alert(data.error); return; }
-      renderPay(data.product, data.order, data.payment);
+      renderPay(data.product, data.order, data.payment, data.checkout);
       poll(data.order.id);
     });
 }
 
-function renderPay(product, order, payment) {
+function renderPay(product, order, payment, checkout) {
   var app = document.getElementById('app');
   app.innerHTML = '';
   var back = h('button', { 'class': 'secondary', text: '← back to shop' });
   back.onclick = load;
   var status = h('div', { 'class': 'status', id: 'status', text: 'Waiting for payment…' });
+  var qr = h('div', { 'class': 'qr' });
+  qr.innerHTML = checkout.qrSvg; // our own SVG for our own URL — safe to inline
   app.appendChild(h('div', { 'class': 'pay' }, [
     h('h2', { text: product.emoji + '  ' + product.name }),
-    h('p', { text: 'Send this payment from your Canton wallet. The shop settles it the moment it lands on the ledger.' }),
+    h('p', { text: 'Scan with your Canton wallet to review and pay. The shop settles the moment the payment lands on the ledger.' }),
+    qr,
+    h('div', { 'class': 'muted', text: 'or pay manually:' }),
     row('Amount', payment.amount + ' CC', true),
     row('To', payment.payTo, true),
     row('Memo', payment.memo, true),
@@ -141,6 +153,10 @@ function poll(orderId) {
 function load() {
   fetch('/shop').then(function (r) { return r.json(); }).then(function (data) { renderCatalog(data.products || []); });
 }
+
+document.title = CONFIG.shop;
+var sn = document.getElementById('shopname');
+if (sn) sn.textContent = '🛍️ ' + CONFIG.shop;
 load();
 </script>
 </body>
