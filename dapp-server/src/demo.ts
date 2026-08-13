@@ -7,28 +7,13 @@
 // submission pipeline — allocate → tap → transfer, each prepare → sign →
 // execute. Point SHOP_URL at a running dapp-server on a running LocalNet.
 
-import { SDK, localNetStaticConfig, CustomLogAdapter } from '@canton-network/wallet-sdk';
+import { createLocalNetSdk, localnetRegistryUrl } from './localnet.ts';
 
 const SHOP = process.env['SHOP_URL'] ?? 'http://localhost:8088';
 const CART = [
   { productId: 'coffee', quantity: 2 },
   { productId: 'stickers', quantity: 1 },
 ];
-
-const C = localNetStaticConfig;
-const auth = {
-  method: 'self_signed' as const,
-  issuer: 'unsafe-auth',
-  credentials: {
-    clientId: String(C.LOCALNET_USER_ID),
-    clientSecret: 'unsafe',
-    audience: 'https://canton.network.global',
-    scope: '',
-  },
-};
-const quiet = new CustomLogAdapter((level: string, _ctx: unknown, message?: string) => {
-  if (level === 'error') console.error(`[sdk] ${message ?? ''}`);
-});
 
 interface CheckoutResponse {
   order: { id: string; payTo: string; memo: string; description: string };
@@ -45,11 +30,7 @@ function note(msg: string) { console.log(`   ${msg}`); }
 
 async function main(): Promise<void> {
   step('①', 'connecting to LocalNet…');
-  const base = await SDK.create({ auth, ledgerClientUrl: C.LOCALNET_APP_USER_LEDGER_URL, logAdapter: quiet });
-  const sdk = await base.extend({
-    token: { auth, registries: [C.LOCALNET_REGISTRY_API_URL], validatorUrl: C.LOCALNET_APP_VALIDATOR_URL },
-    amulet: { auth, scanApiUrl: C.LOCALNET_SCAN_API_URL, registryUrl: C.LOCALNET_REGISTRY_API_URL, validatorUrl: C.LOCALNET_APP_VALIDATOR_URL },
-  });
+  const sdk = await createLocalNetSdk();
 
   // A fresh external customer party the demo fully controls.
   const keys = sdk.keys.generate();
@@ -90,7 +71,7 @@ async function main(): Promise<void> {
     recipient: co.order.payTo,
     amount: co.total,
     instrumentId: 'Amulet',
-    registryUrl: new URL(String(C.LOCALNET_REGISTRY_API_URL)),
+    registryUrl: localnetRegistryUrl,
     memo: co.order.memo,
   }));
 
