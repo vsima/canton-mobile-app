@@ -66,8 +66,8 @@ export function storefrontHtml(options: StorefrontOptions): string {
   .qrbox { text-align:center; }
   .qrbox svg { width:230px; height:230px; background:#fff; border-radius:12px; padding:10px; }
   .qrbox .cap { color:var(--muted); font-size:.85rem; margin-top:8px; }
-  .wcuri { display:flex; align-items:center; gap:8px; margin:12px auto 0; max-width:280px; }
-  .wcuri-text { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem; color:var(--muted); word-break:break-all; text-align:left; flex:1; }
+  .wcuri { display:flex; align-items:center; gap:8px; margin:12px auto 0; max-width:300px; }
+  .wcuri-input { flex:1; min-width:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:7px 9px; }
   .pushbox { text-align:center; padding:18px 8px; }
   .pushbox .push-emoji { font-size:3.4rem; line-height:1; display:inline-block; animation:pushwiggle 1.6s ease-in-out infinite; }
   .pushbox .push-title { font-size:1.15rem; font-weight:700; margin-top:12px; }
@@ -406,10 +406,9 @@ function openSignInDialog() {
     // A simulator / desktop wallet can't scan the QR — expose the wc: link as
     // copyable text so it can be pasted into the wallet's Connect field.
     if (data.uri) {
-      qrEl.appendChild(h('div', { 'class': 'wcuri' }, [
-        h('span', { 'class': 'wcuri-text', text: data.uri }),
-        copyBtn(data.uri),
-      ]));
+      var uriInput = h('input', { 'class': 'wcuri-input', type: 'text', readonly: 'readonly', value: data.uri });
+      uriInput.onclick = function () { this.select(); };
+      qrEl.appendChild(h('div', { 'class': 'wcuri' }, [uriInput, copyBtn(data.uri)]));
       qrEl.appendChild(h('div', { 'class': 'cap', text: 'On a simulator? Copy this link and paste it into Connect.' }));
     }
     setSiStatus('Waiting for your wallet to connect and sign…', true);
