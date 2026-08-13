@@ -45,6 +45,9 @@ import io.github.vsima.canton.dapp.wallet.DappMessageSigner
 import io.github.vsima.canton.dapp.wallet.DappNetworkConfig
 import io.github.vsima.canton.dapp.wallet.DappPeer
 import io.github.vsima.canton.dapp.wallet.DappSession
+import io.github.vsima.canton.dapp.wallet.JsonLedgerApiClient
+import io.github.vsima.canton.dapp.wallet.JsonPrepareExecutePipeline
+import io.github.vsima.canton.wallet.InteractiveSubmissionClient
 import io.github.vsima.canton.dapp.wc.CantonWalletConnect
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withContext
@@ -90,6 +93,10 @@ object WalletEnvironment {
      *  `adb reverse` tunnels (set via the MainActivity `host` extra). */
     var hostBridge = "10.0.2.2"
     const val ledgerPort = 2901
+
+    /** JSON Ledger API of the wallet's participant — the `prepare` leg of the
+     *  CIP-0103 prepareExecute pipeline. Same participant as [ledgerPort]'s gRPC. */
+    val jsonLedgerApiUrl: String get() = "http://$hostBridge:2975"
     const val registryUrl = "http://scan.localhost:4000"
     const val scanUrl = "http://scan.localhost:4000/api/scan"
     const val validatorUrl = "http://wallet.localhost:2000/api/validator"
@@ -837,13 +844,35 @@ class WalletModel(
     /** Builds the provider engine + WalletConnect adapter once the wallet is
      *  ready, and registers them with the Reown binding. Idempotent. */
     fun enableDappConnect() {
-        if (cantonWc != null || partyId == null || driver == null) return
+        val d = driver
+        val authed = authedChannel
+        val sync = synchronizerId
+        if (cantonWc != null || partyId == null || d == null || authed == null || sync == null) return
+        // The CIP-0103 prepareExecute pipeline: a dApp's commands are prepared on
+        // this participant (JSON), the prepared-tx hash is verified, signed in the
+        // TEE, and executed (gRPC). This is what lets the wallet accept a pushed
+        // payment (or any dApp interaction), not just sign messages.
+        val prepareExecute = JsonPrepareExecutePipeline(
+            ledgerApi = JsonLedgerApiClient(
+                baseUrl = WalletEnvironment.jsonLedgerApiUrl,
+                accessTokenProvider = { WalletEnvironment.unsafeJwt(WalletEnvironment.userId) },
+                httpClient = WalletEnvironment.http,
+            ),
+            submission = InteractiveSubmissionClient(authed),
+            signer = d,
+            userId = WalletEnvironment.userId,
+        )
         val session = DappSession(
             peer = DappPeer(id = "walletconnect", name = "dApp (WalletConnect)"),
             accounts = DappAccountsSource { dappAccounts() },
             approver = approver,
-            network = DappNetworkConfig(networkId = DAPP_NETWORK_ID),
+            network = DappNetworkConfig(
+                networkId = DAPP_NETWORK_ID,
+                jsonApiBaseUrl = WalletEnvironment.jsonLedgerApiUrl,
+                synchronizerId = sync,
+            ),
             messageSigner = messageSigner,
+            prepareExecute = prepareExecute,
         )
         val adapter = CantonWalletConnect(session, DAPP_NETWORK_ID)
         cantonWc = adapter
