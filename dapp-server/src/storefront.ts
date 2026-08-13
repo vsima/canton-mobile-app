@@ -97,6 +97,10 @@ export function storefrontHtml(options: StorefrontOptions): string {
   .confetti { position:fixed; top:-14px; width:9px; height:15px; border-radius:2px; opacity:.9; pointer-events:none; z-index:50; animation-name:confall; animation-timing-function:linear; animation-fill-mode:forwards; }
   @keyframes confall { to { transform:translateY(110vh) rotate(720deg); } }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  dialog.modal { border:0; border-radius:16px; padding:0; max-width:420px; width:calc(100% - 40px); background:var(--card); color:var(--ink); box-shadow:0 24px 64px rgba(0,0,0,.35); }
+  dialog.modal::backdrop { background:rgba(0,0,0,.5); }
+  .modal-body { padding:24px; }
+  .modal-body h2 { text-align:center; }
 </style>
 </head>
 <body>
@@ -106,11 +110,13 @@ export function storefrontHtml(options: StorefrontOptions): string {
   <button id="signin" class="secondary" style="margin-top:10px">🔐 Sign in with your wallet</button>
 </header>
 <main id="app"><p>Loading…</p></main>
+<dialog id="signin-dialog" class="modal"></dialog>
 <script>
 var CONFIG = ${config};
 var PRODUCTS = [];
 var cart = {};    // productId -> quantity
 var view = 'catalog';
+var signinTimer = null;   // poll handle for the open sign-in dialog
 
 function h(tag, attrs, children) {
   var el = document.createElement(tag);
@@ -354,7 +360,7 @@ function renderSigninButton() {
   } else {
     b.textContent = '🔐 Sign in with your wallet';
     b.title = '';
-    b.onclick = showSignIn;
+    b.onclick = openSignInDialog;
   }
 }
 
@@ -378,19 +384,21 @@ function setSiStatus(text, spinning) {
   s.appendChild(h('span', { text: text }));
 }
 
-function showSignIn() {
-  view = 'signin';
-  var cb = document.getElementById('cartbar'); if (cb) cb.remove();
-  var app = document.getElementById('app');
-  app.innerHTML = '';
+// Sign-in runs in a modal dialog over the catalog, so you never leave the shop.
+function openSignInDialog() {
+  var dlg = document.getElementById('signin-dialog');
   var status = h('div', { 'class': 'statusbar', id: 'si-status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Starting a WalletConnect session…' })]);
   var qrbox = h('div', { 'class': 'qrbox', id: 'si-qr' });
-  var back = h('button', { 'class': 'ghost', text: '← back to shop' }); back.onclick = showCatalog;
-  app.appendChild(h('div', { 'class': 'panel' }, [
+  var cancel = h('button', { 'class': 'ghost', text: 'Cancel' }); cancel.onclick = closeSignInDialog;
+  dlg.innerHTML = '';
+  dlg.appendChild(h('div', { 'class': 'modal-body' }, [
     h('h2', { text: 'Sign in with your Canton wallet' }),
     status, qrbox,
-    h('div', { style: 'margin-top:12px' }, [back]),
+    h('div', { style: 'margin-top:12px;text-align:center' }, [cancel]),
   ]));
+  // Esc / backdrop dismiss stops the poll too.
+  dlg.onclose = function () { if (signinTimer) { clearInterval(signinTimer); signinTimer = null; } };
+  if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
   fetch('/siwc-wc/start', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (data) {
     if (data.error) { setSiStatus(data.error, false); return; }
     var qrEl = document.getElementById('si-qr');
@@ -409,32 +417,36 @@ function showSignIn() {
   }).catch(function (e) { setSiStatus(String(e), false); });
 }
 
+function closeSignInDialog() {
+  if (signinTimer) { clearInterval(signinTimer); signinTimer = null; }
+  var dlg = document.getElementById('signin-dialog');
+  if (dlg.open) dlg.close(); else dlg.removeAttribute('open');
+}
+
 function pollSignIn(id) {
-  var timer = setInterval(function () {
+  signinTimer = setInterval(function () {
     fetch('/siwc-wc/status/' + id).then(function (r) { return r.json(); }).then(function (data) {
-      if (data.status === 'signed-in') { clearInterval(timer); renderSignedIn(data.party); }
-      else if (data.status === 'failed') { clearInterval(timer); setSiStatus('Sign-in failed: ' + (data.reason || 'declined'), false); }
+      if (data.status === 'signed-in') { clearInterval(signinTimer); signinTimer = null; onSignedIn(data.party); }
+      else if (data.status === 'failed') { clearInterval(signinTimer); signinTimer = null; setSiStatus('Sign-in failed: ' + (data.reason || 'declined'), false); }
     }).catch(function () {});
   }, 1500);
 }
 
-function renderSignedIn(party) {
+// Flash a success state in the dialog, then close it — the catalog is still
+// there underneath, and the sign-in button now shows the address.
+function onSignedIn(party) {
   setSignedIn(party);
-  var app = document.getElementById('app');
-  app.innerHTML = '';
+  var dlg = document.getElementById('signin-dialog');
   var check = h('div', {});
   check.innerHTML = '<svg viewBox="0 0 52 52" class="checkmark"><circle class="ck-circle" cx="26" cy="26" r="24"/><path class="ck-check" d="M14 27l7 7 16-16"/></svg>';
-  var sub = h('p', { 'class': 'paid-sub', text: 'Authenticated over WalletConnect as' });
-  var code = h('code', { text: party }); code.style.cssText = 'display:block;word-break:break-all;margin-top:6px';
-  sub.appendChild(code);
-  var more = h('button', { text: 'Back to shop' }); more.onclick = showCatalog;
-  app.appendChild(h('div', { 'class': 'success' }, [
+  dlg.innerHTML = '';
+  dlg.appendChild(h('div', { 'class': 'modal-body', style: 'text-align:center' }, [
     check,
     h('h2', { 'class': 'paid-title', text: 'Signed in!' }),
-    sub,
-    more,
+    h('p', { 'class': 'paid-sub', text: shortParty(party) }),
   ]));
   confetti();
+  setTimeout(closeSignInDialog, 1600);
 }
 
 // --- boot ------------------------------------------------------------------
