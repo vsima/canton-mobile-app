@@ -12,11 +12,13 @@
     "start": "node src/server.ts",
     "dev": "node --watch src/server.ts",
     "demo": "node src/demo.ts",
+    "wc-demo": "node src/wc-demo.ts",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@canton-network/wallet-sdk": "^1.4.0",
+    "@walletconnect/sign-client": "^2.23.10",
     "express": "^5.1.0",
     "qrcode": "^1.5.4"
   },
