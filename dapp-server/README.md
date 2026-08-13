@@ -111,9 +111,15 @@ matches what the nonce was issued for; and the timestamps are fresh.
 ```sh
 npm install
 MERCHANT_PARTY=<party> npm start   # then open http://localhost:8088 for the shop
+npm run demo                       # headless: a simulated customer buys and pays a cart
 npm test                           # node --test — sign-in, order matching, and the shop
 npm run typecheck                  # tsc --noEmit
 ```
+
+`npm run demo` runs the whole loop with no phone, against a running server and
+LocalNet: it allocates a fresh customer party, funds it, checks out a cart, pays
+the order, and waits for the shop to settle it — the SDK's external-party
+pipeline end to end.
 
 Requires Node ≥ 22 (it runs the TypeScript sources directly via Node's native
 type stripping — no build step). Point it at a running Splice LocalNet (the
@@ -151,12 +157,12 @@ environment-driven:
   the order, and pays; the page polls to Paid. The wallet side (scan → fetch →
   review → prefill Send) is built on both iOS and Android. Server verified live;
   the wallet fetch is a plain `GET` of the checkout JSON.
-- **Headless demo (`npm run demo`) — next.** A simulated customer that allocates
-  and funds a party via the SDK, buys a product, and pays it — so the whole shop
-  loop runs end-to-end with one command and no phone. This is the "fresh
-  send → settle" step; it's the SDK's external-party submission pipeline
-  (`keys.generate` → `party.external` → `amulet.tap` → `token.transfer.create`
-  → `ledger.prepare`/`execute`).
+- **Headless demo (`npm run demo`) — done.** A simulated customer runs the whole
+  loop with no phone: allocate a fresh party, fund it, check out a cart, pay the
+  order, and wait for the shop to settle it. This is the "fresh send → settle"
+  step, the SDK's external-party pipeline end to end (`keys.generate` →
+  `party.external` allocate → `amulet.tap` → `token.transfer.create`, each
+  `ledger.prepare` → `sign` → `execute`). Live-verified against LocalNet.
 - **Authoritative party→key binding — still open.** Sign-in currently trusts the
   public key the wallet claimed at connect time; binding it to the party's
   on-ledger key is a focused follow-up now that the ledger connection exists.
