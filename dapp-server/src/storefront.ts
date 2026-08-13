@@ -66,6 +66,8 @@ export function storefrontHtml(options: StorefrontOptions): string {
   .qrbox { text-align:center; }
   .qrbox svg { width:230px; height:230px; background:#fff; border-radius:12px; padding:10px; }
   .qrbox .cap { color:var(--muted); font-size:.85rem; margin-top:8px; }
+  .wcuri { display:flex; align-items:center; gap:8px; margin:12px auto 0; max-width:280px; }
+  .wcuri-text { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem; color:var(--muted); word-break:break-all; text-align:left; flex:1; }
   .pushbox { text-align:center; padding:18px 8px; }
   .pushbox .push-emoji { font-size:3.4rem; line-height:1; display:inline-block; animation:pushwiggle 1.6s ease-in-out infinite; }
   .pushbox .push-title { font-size:1.15rem; font-weight:700; margin-top:12px; }
@@ -391,7 +393,17 @@ function showSignIn() {
   ]));
   fetch('/siwc-wc/start', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (data) {
     if (data.error) { setSiStatus(data.error, false); return; }
-    document.getElementById('si-qr').innerHTML = data.qrSvg + '<div class="cap">Open your wallet → Connect tab → scan this</div>';
+    var qrEl = document.getElementById('si-qr');
+    qrEl.innerHTML = data.qrSvg + '<div class="cap">Open your wallet → Connect tab → scan this</div>';
+    // A simulator / desktop wallet can't scan the QR — expose the wc: link as
+    // copyable text so it can be pasted into the wallet's Connect field.
+    if (data.uri) {
+      qrEl.appendChild(h('div', { 'class': 'wcuri' }, [
+        h('span', { 'class': 'wcuri-text', text: data.uri }),
+        copyBtn(data.uri),
+      ]));
+      qrEl.appendChild(h('div', { 'class': 'cap', text: 'On a simulator? Copy this link and paste it into Connect.' }));
+    }
     setSiStatus('Waiting for your wallet to connect and sign…', true);
     pollSignIn(data.id);
   }).catch(function (e) { setSiStatus(String(e), false); });
