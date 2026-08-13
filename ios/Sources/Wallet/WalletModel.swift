@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
+import CantonDappKit
+import CantonDappWCKit
+import CantonDappWalletKit
 import CantonKit
 import CantonLedgerAPI
 import CantonWalletKit
@@ -53,6 +56,23 @@ final class WalletModel {
     /// so only the tapped row's buttons disable — not the whole inbox.
     private(set) var processing: Set<String> = []
     var lastSend: SendReceipt?
+
+    // ── WalletConnect (dApp connect) ───────────────────────────────────
+    /// A WalletConnect request the engine surfaced for approval — the CIP-0103
+    /// request plus a `resolve` to answer it. Non-nil drives the approval sheet;
+    /// the sheet calls `resolve`.
+    struct WcApproval: Identifiable {
+        let id = UUID()
+        let request: DappApprovalRequest
+        let resolve: (DappApproval) -> Void
+    }
+    private(set) var pendingApproval: WcApproval?
+    /// Last WalletConnect status line, shown on the Connect screen.
+    private(set) var wcStatus: String?
+    /// Active WalletConnect sessions, shown on the Connect screen.
+    private(set) var wcSessions: [WcSessionInfo] = []
+    private var cantonWc: CantonWalletConnect?
+
     /// A checkout URL delivered by a `canton-checkout:` deep link (`.onOpenURL`),
     /// awaiting the Send view to parse and prefill it.
     private(set) var pendingCheckoutUrl: String?
@@ -107,6 +127,7 @@ final class WalletModel {
                 self.synchronizerId = record.synchronizerId
                 phase = .ready
                 print("WALLET: restored \(record.partyId) signer=\(label)")
+                enableDappConnect()
                 await refresh()
                 return
             }
@@ -149,6 +170,7 @@ final class WalletModel {
             )
             phase = .ready
             print("WALLET: onboarded \(party.partyId) signer=\(label)")
+            enableDappConnect()
             await refresh()
         } catch {
             phase = .failed("\(error)")
@@ -540,6 +562,115 @@ final class WalletModel {
         return party
     }
 
+    // MARK: - WalletConnect (dApp connect)
+    //
+    // The wallet answers a dApp over WalletConnect through the SDK: the provider
+    // engine (DappSession) does approvals + signing, and the CantonDappWCKit
+    // adapter carries CIP-0103 frames. This model supplies the engine's
+    // collaborators — the account it shares, the approval UI (a suspending
+    // handoff to `pendingApproval`), the message signer (the enclave driver over
+    // the domain-separated bytes, hex-encoded), and the prepareExecute pipeline.
+    // The Reown client that moves the frames lives in WalletConnectController.
+
+    /// CAIP-2 network id advertised over WalletConnect / CIP-0103.
+    static let dappNetworkId = "canton:localnet"
+
+    /// This wallet's single account, as the CIP-0103 projection a dApp sees.
+    private func dappAccounts() async -> [DappWallet] {
+        guard let partyId, let driver,
+              let publicKey = try? await driver.publicKey() else { return [] }
+        let publicKeyHex = publicKey.keyData.map { String(format: "%02x", $0) }.joined()
+        return [
+            DappWallet(
+                primary: true,
+                partyId: partyId,
+                status: .allocated,
+                hint: String(partyId.split(separator: ":").first ?? ""),
+                publicKey: publicKeyHex,
+                namespace: String(partyId.split(separator: ":").last ?? ""),
+                networkId: Self.dappNetworkId,
+                signingProviderId: "secure-enclave"
+            ),
+        ]
+    }
+
+    /// The engine's approval delegate: suspends, surfacing the request as
+    /// `pendingApproval` until the sheet answers it.
+    private func awaitApproval(_ request: DappApprovalRequest) async -> DappApproval {
+        await withCheckedContinuation { continuation in
+            // `resolve` may be called by a sheet button and again by a
+            // swipe-dismiss; the guard keeps the continuation resumed once.
+            // Only ever touched on the main actor, so the flag needs no lock.
+            var resumed = false
+            self.pendingApproval = WcApproval(request: request) { [weak self] answer in
+                guard !resumed else { return }
+                resumed = true
+                self?.pendingApproval = nil
+                continuation.resume(returning: answer)
+            }
+        }
+    }
+
+    /// Builds the provider engine + WalletConnect adapter once the wallet is
+    /// ready, and registers them with the Reown binding. Idempotent.
+    func enableDappConnect() {
+        guard cantonWc == nil, partyId != nil,
+              let client, let driver, let synchronizerId else { return }
+        // The CIP-0103 prepareExecute pipeline: a dApp's commands are prepared on
+        // this participant (JSON Ledger API), the prepared-tx hash is verified,
+        // signed in the enclave, and executed (gRPC) — what lets the wallet accept
+        // a pushed payment, not just sign messages.
+        let capturedEnv = environment
+        let pipeline = JSONPrepareExecutePipeline(
+            ledgerAPI: JSONLedgerAPIClient(
+                baseURL: capturedEnv.jsonLedgerApiURL,
+                accessTokenProvider: {
+                    WalletEnvironment.unsafeJWT(
+                        sub: capturedEnv.userId,
+                        audience: capturedEnv.jwtAudience,
+                        secret: capturedEnv.unsafeJWTSecret ?? ""
+                    )
+                }
+            ),
+            submission: InteractiveSubmissionClient(client: client),
+            signer: driver,
+            userId: capturedEnv.userId
+        )
+        let session = DappSession(
+            peer: DappPeer(id: "walletconnect", name: "dApp (WalletConnect)"),
+            accounts: ClosureAccountsSource { [weak self] in await self?.dappAccounts() ?? [] },
+            approver: ClosureApprover { [weak self] request in
+                await self?.awaitApproval(request) ?? .rejected(reason: "wallet unavailable")
+            },
+            network: DappNetworkConfig(
+                networkId: Self.dappNetworkId,
+                jsonApiBaseUrl: capturedEnv.jsonLedgerApiURL,
+                synchronizerId: synchronizerId
+            ),
+            messageSigner: HexMessageSigner(driver: driver),
+            prepareExecute: pipeline
+        )
+        guard let adapter = try? CantonWalletConnect(handler: session, networkId: Self.dappNetworkId) else { return }
+        cantonWc = adapter
+        let controller = WalletConnectController.shared
+        controller.onStatus = { [weak self] line in self?.wcStatus = line }
+        controller.onSessions = { [weak self] list in self?.wcSessions = list }
+        controller.register(adapter: adapter, accounts: { [weak self] in await self?.dappAccounts() ?? [] })
+        print("WALLET: WalletConnect enabled for \(partyId?.prefix(24) ?? "")…")
+    }
+
+    /// Hands a scanned/pasted `wc:` pairing URI to the Reown client.
+    func pairWalletConnect(_ uri: String) {
+        wcStatus = "Pairing…"
+        WalletConnectController.shared.pair(uri)
+    }
+
+    /// Refresh the active WalletConnect sessions (called when the Connect screen opens).
+    func refreshWcSessions() { WalletConnectController.shared.refreshSessions() }
+
+    /// Disconnect a WalletConnect session by topic.
+    func disconnectWcSession(topic: String) { WalletConnectController.shared.disconnect(topic: topic) }
+
     private func scan() -> ScanClient {
         ScanClient(baseURL: URL(string: environment.scanURL)!)
     }
@@ -552,6 +683,31 @@ final class WalletModel {
 struct WalletUIError: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
+}
+
+// ── DappSession seam adapters ──────────────────────────────────────────
+// Small closure-backed conformances so `WalletModel` can supply the engine's
+// collaborators as closures (the Kotlin twin uses SAM lambdas for the same).
+
+private struct ClosureAccountsSource: DappAccountsSource {
+    let provider: @Sendable () async -> [DappWallet]
+    func accounts() async throws -> [DappWallet] { await provider() }
+}
+
+private struct ClosureApprover: DappApprovalDelegate {
+    let handler: @Sendable (DappApprovalRequest) async -> DappApproval
+    func approve(_ request: DappApprovalRequest) async -> DappApproval { await handler(request) }
+}
+
+/// Signs a CIP-0103 message with the enclave driver over the domain-separated
+/// bytes, returned **hex** — the encoding the dApp-server's sign-in verifier
+/// expects (`Buffer.from(signature, 'hex')`), matching the Android twin.
+private struct HexMessageSigner: DappMessageSigner {
+    let driver: any SigningDriver
+    func sign(account: DappWallet, message: String) async throws -> String {
+        let signature = try await driver.sign(DappSignMessage.signingBytes(message))
+        return signature.signature.map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 /// Daml-JSON ⇄ proto bridging for the dev faucet's operator-side transfer.

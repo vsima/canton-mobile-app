@@ -13,6 +13,11 @@ struct WalletEnvironment: Sendable {
     let name: String
     let ledgerHost: String
     let ledgerPort: Int
+    /// The JSON Ledger API base URL — the `prepareExecute` "prepare" leg a dApp
+    /// session drives (CIP-0103 one-tap pay). LocalNet publishes the app-user
+    /// participant's JSON API on 2975 next to its gRPC ledger on 2901; the
+    /// Android twin uses the same port.
+    let jsonLedgerApiURL: String
     let registryURL: String
     let scanURL: String
     let validatorURL: String
@@ -36,6 +41,8 @@ struct WalletEnvironment: Sendable {
             name: "LocalNet",
             ledgerHost: host,
             ledgerPort: env["CANTON_PORT"].flatMap(Int.init) ?? 2901,
+            jsonLedgerApiURL: env["CANTON_JSON_URL"]
+                ?? "http://\(host):\(env["CANTON_JSON_PORT"].flatMap(Int.init) ?? 2975)",
             registryURL: env["CANTON_REGISTRY_URL"] ?? "http://scan.localhost:4000",
             scanURL: env["CANTON_SCAN_URL"] ?? "http://scan.localhost:4000/api/scan",
             validatorURL: env["CANTON_VALIDATOR_URL"] ?? "http://wallet.localhost:2000/api/validator",
