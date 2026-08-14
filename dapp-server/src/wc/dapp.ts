@@ -5,8 +5,8 @@
 // runs. It opens a session (the QR/URI a wallet scans), then pushes CIP-0103
 // requests over it: `requestSignMessage` to authenticate a party (Sign-In with
 // Canton, over a live session instead of a scanned challenge) and
-// `requestTransfer` to ask the wallet to pay. The wallet holds the keys; this
-// side only asks and reads the reply.
+// `prepareExecuteAndWait` to push a prepared payment. The wallet holds the keys;
+// this side only asks and reads the reply.
 
 import type { SessionTypes } from '@walletconnect/types';
 import { makeSignClient } from './client.ts';
@@ -17,9 +17,7 @@ import type {
   DappAccount,
   ExecutedResult,
   PrepareSubmission,
-  RequestTransferParams,
   SignMessageResult,
-  TransferResult,
 } from './protocol.ts';
 
 export class DappConnector {
@@ -91,15 +89,6 @@ export class DappConnector {
       topic,
       chainId: this.chain,
       request: { method: CANTON_METHODS.prepareExecuteAndWait, params: submission },
-    });
-  }
-
-  /** Ask the wallet to approve and submit a transfer (non-standard convenience). */
-  async requestTransfer(topic: string, params: RequestTransferParams): Promise<TransferResult> {
-    return this.client.request<TransferResult>({
-      topic,
-      chainId: this.chain,
-      request: { method: CANTON_METHODS.requestTransfer, params },
     });
   }
 

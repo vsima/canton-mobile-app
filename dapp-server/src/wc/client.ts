@@ -1,12 +1,11 @@
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
-// The shared WalletConnect Sign client factory. Both ends of the round-trip —
-// the dApp and the headless wallet — are WalletConnect Sign clients talking
-// through the same relay; only their roles differ. Two clients in one process
-// must NOT share a Core, or they share one relay subscription and each other's
-// storage; `customStoragePrefix` gives each its own. A projectId (free, from
-// cloud.reown.com) authenticates to the public relay.
+// The WalletConnect Sign client factory. The dApp end of the round-trip is a
+// Sign client talking to a wallet through the public relay. Each client in a
+// process must have its own Core, or clients share one relay subscription and
+// each other's storage; `customStoragePrefix` gives each its own. A projectId
+// (free, from cloud.reown.com) authenticates to the public relay.
 
 import { Core } from '@walletconnect/core';
 import { SignClient } from '@walletconnect/sign-client';

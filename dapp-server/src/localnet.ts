@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Victor Sima
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared LocalNet wiring for the headless demos. Both `demo.ts` (the direct
-// customer) and `wc-demo.ts` (the WalletConnect customer) allocate a party,
-// tap funds, and transfer on the same LocalNet with the same dev auth, so the
-// SDK setup lives here once rather than in each demo.
+// Shared LocalNet wiring. The `demo.ts` customer and the server's one-tap
+// payment push both allocate a party, tap funds, and transfer on the same
+// LocalNet with the same dev auth, so the SDK setup lives here once rather than
+// being repeated at each call site.
 
 import { SDK, localNetStaticConfig, CustomLogAdapter } from '@canton-network/wallet-sdk';
 

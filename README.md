@@ -70,8 +70,8 @@ flowchart LR
 No relay, no server on the phone, no key ever leaving the device. The QR is a
 self-describing payload, so the wallet prefills instantly — offline, with no
 call back to the shop until the on-ledger payment itself. A direct CIP-0103
-connection (WalletConnect-style one-tap) is the roadmap; today the ledger plus
-the QR carry the flow.
+connection (WalletConnect one-tap) now ships alongside it, live-verified
+end-to-end on both phones; the QR flow above stays the zero-relay, offline path.
 
 ## What's implemented — and what it proves for the SDK
 
@@ -111,6 +111,10 @@ the QR carry the flow.
   SDK's `signMessage` domain-separation scheme.
 - **Scan-to-pay payload.** A self-describing `canton-checkout://pay?…` QR the
   wallet reads inline.
+- **WalletConnect one-tap.** The storefront also signs in and pays over a live
+  WalletConnect session (CIP-0103): the wallet approves a connection, then the
+  shop pushes a prepared payment (`prepareExecuteAndWait`) the wallet signs on
+  device — live-verified end-to-end on both phones.
 
   *Proves: the **official ecosystem SDKs** drive a real dApp against our wallet —
   an independent implementation, not our own client talking to our own engine.*
