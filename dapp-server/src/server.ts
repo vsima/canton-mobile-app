@@ -46,9 +46,14 @@ export function createApp(
   const wcSignIns = new Map<string, WcSignIn>();
   let dappConnectorPromise: Promise<import('./wc/dapp.ts').DappConnector> | null = null;
 
-  // A signed-in party's live WalletConnect session (kept from sign-in), so a
-  // checkout can push the payment straight to that wallet.
-  const connectedSessions = new Map<string, string>(); // party -> session topic
+  // A signed-in browser's live WalletConnect session (kept from sign-in), so a
+  // checkout can push the payment straight to that wallet. Keyed by the sign-in
+  // id — an unguessable handle returned only to the browser that started the
+  // sign-in — NOT by the party id, which is semi-public (it appears in /orders).
+  // Keying by party would let anyone who learns a signed-in party's id push an
+  // unsolicited payment prompt to that wallet; keying by the sign-in id means a
+  // caller must prove it owns the session, not merely name the party.
+  const connectedSessions = new Map<string, { party: string; topic: string }>(); // signInId -> session
 
   // The wallet SDK (for building a Token Standard transfer to push) is loaded
   // lazily on first payment, like the ledger watcher — the sign-in path never
@@ -219,7 +224,7 @@ export function createApp(
       void done.then(
         ({ party, topic }) => {
           console.log(`${tag} SIGNED IN ${party}`);
-          connectedSessions.set(party, topic); // keep the session for one-tap pay
+          connectedSessions.set(id, { party, topic }); // keyed by sign-in id, for one-tap pay
           wcSignIns.set(id, { status: 'signed-in', party, startedAt: Date.now() });
         },
         (e: unknown) => {
@@ -264,7 +269,7 @@ export function createApp(
       return { productId: String(o['productId'] ?? ''), quantity: Number(o['quantity'] ?? 0) };
     });
     try {
-      const { order, lineItems, total } = checkoutCart(items, config.merchantParty, orders);
+      const { order, lineItems, total } = checkoutCart(items, config.merchantParty, orders, config.instrumentAdmin);
       const uri = checkoutUri({
         publicUrl: config.publicUrl,
         orderId: order.id,
@@ -277,15 +282,17 @@ export function createApp(
       });
       const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1 });
 
-      // If the caller is a signed-in wallet with a live session, push the payment
-      // straight to it (one-tap pay) instead of relying on the QR. Fire-and-forget:
-      // the wallet prompts the user, the watcher settles. The QR is still returned
-      // as the manual fallback.
-      const party = typeof body['party'] === 'string' ? body['party'] : undefined;
-      const topic = party !== undefined ? connectedSessions.get(party) : undefined;
-      const pushed = topic !== undefined;
-      if (party !== undefined && topic !== undefined) {
-        void pushPayment(party, topic, order);
+      // If the caller holds a live sign-in session, push the payment straight to
+      // that wallet (one-tap pay) instead of relying on the QR. The wallet is
+      // chosen by the caller's own `sessionId` (the sign-in id it was given),
+      // never by a party id from the body — otherwise anyone could aim a payment
+      // prompt at a party they merely named. Fire-and-forget: the wallet prompts
+      // the user, the watcher settles. The QR is still returned as the fallback.
+      const sessionId = typeof body['sessionId'] === 'string' ? body['sessionId'] : undefined;
+      const session = sessionId !== undefined ? connectedSessions.get(sessionId) : undefined;
+      const pushed = session !== undefined;
+      if (session !== undefined) {
+        void pushPayment(session.party, session.topic, order);
       }
 
       res.status(201).json({
@@ -319,6 +326,12 @@ export function createApp(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const payTo = typeof body['payTo'] === 'string' && body['payTo'] !== '' ? body['payTo'] : config.merchantParty;
     const { amount, instrumentId, memo } = body;
+    // The caller may pin the instrument admin; otherwise fall back to the
+    // server's configured one, so orders keep enforcing (admin, id) by default.
+    const instrumentAdmin =
+      typeof body['instrumentAdmin'] === 'string' && body['instrumentAdmin'] !== ''
+        ? (body['instrumentAdmin'] as string)
+        : config.instrumentAdmin;
     if (typeof payTo !== 'string' || payTo === '') {
       return res.status(400).json({ error: 'payTo is required (no merchant party configured)' });
     }
@@ -330,6 +343,7 @@ export function createApp(
         payTo,
         amount,
         ...(typeof instrumentId === 'string' ? { instrumentId } : {}),
+        ...(instrumentAdmin !== undefined && instrumentAdmin !== '' ? { instrumentAdmin } : {}),
         ...(typeof memo === 'string' ? { memo } : {}),
       });
       res.status(201).json({
@@ -369,6 +383,13 @@ export async function startWatcher(
 ): Promise<(() => void) | null> {
   if (config.merchantParty === undefined) return null;
   const party = config.merchantParty;
+  if (config.instrumentAdmin === undefined) {
+    log(
+      'INSTRUMENT_ADMIN is not set — orders match on instrument id only, so a ' +
+        'look-alike token under another admin could settle them. Set it to the ' +
+        "instrument's authoritative admin (the DSO party for Amulet) to enforce (admin, id).",
+    );
+  }
   const { Ledger } = await import('./ledger.ts');
   const ledger = await Ledger.connect({
     ledgerClientUrl: config.ledgerClientUrl,

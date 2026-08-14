@@ -112,15 +112,19 @@ polling `token.holdings` for the merchant party's incoming `TransferIn` events.
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| `POST` | `/orders` | `{ amount, payTo?, instrumentId?, memo? }` | `201 { order, payment }` |
+| `POST` | `/orders` | `{ amount, payTo?, instrumentId?, instrumentAdmin?, memo? }` | `201 { order, payment }` |
 | `GET`  | `/orders` | — | `{ orders }` |
 | `GET`  | `/orders/:id` | — | `{ order }` or `404` |
 
 `payTo` defaults to the configured `MERCHANT_PARTY`. The response's `payment`
 block is what the payer must send — `amount` to `payTo` with `memo` (the order
 id by default) as the transfer memo. An order settles when an incoming payment
-to `payTo` carries that memo and an equal-or-greater amount (and the named
-instrument, if any). Settlement requires `MERCHANT_PARTY` to be set so the
+to `payTo` carries that memo and an equal-or-greater amount, in the named
+instrument. An instrument is the pair `(admin, id)`: the `id` (`Amulet`) is an
+issuer-chosen label anyone can reuse, so the order also checks the `admin` when
+one is pinned (via `instrumentAdmin` on the order, or the `INSTRUMENT_ADMIN`
+default) — otherwise a token minted under an attacker's admin but named `Amulet`
+would settle a real order. Settlement requires `MERCHANT_PARTY` to be set so the
 watcher knows which party to poll; without it, orders are created but never
 auto-settle.
 
@@ -196,6 +200,7 @@ environment-driven:
 | `SHOP_NAME` | `Canton Corner` | shop name shown on the page and when a wallet reviews a checkout |
 | `PUBLIC_URL` | `http://localhost:$PORT` | base URL baked into the checkout QR; use a LAN address for a real phone |
 | `MERCHANT_PARTY` | — | the party the watcher settles orders against; unset = no auto-settle |
+| `INSTRUMENT_ADMIN` | — | authoritative admin of the accepted instrument (the DSO party, for `Amulet`); orders pin `(admin, id)` so a look-alike token under another admin can't settle them. Unset = id-only matching (fine for a closed LocalNet, unsafe against untrusted issuers) |
 | `WATCH_INTERVAL_MS` | `4000` | how often the watcher polls for new payments |
 | `LEDGER_URL` | `http://localhost:2975/` | JSON Ledger API of the merchant party's participant |
 | `REGISTRY_URL` | `…:2000/api/validator/v0/scan-proxy` | token registry |
