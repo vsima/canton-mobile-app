@@ -95,9 +95,10 @@ signs in its enclave and submits to the ledger itself — the server only watche
 and settles, exactly as with scan-to-pay. Two Canton-specific wrinkles this
 reference pins down: WalletConnect names chains and accounts in CAIP form, but a
 Canton party id contains `::`, which a CAIP-10 address forbids — so the party is
-percent-encoded into the address segment (`canton:localnet:<encoded-party>`); and
-Canton has no registered WalletConnect namespace, so `canton` is a convention of
-this reference. `npm run wc-signin` drives Sign-In against a **real phone** (see
+percent-encoded into the address segment (`canton:localnet:<encoded-party>`),
+matching WalletConnect's published Canton chain support, where `canton` is the
+namespace and the party id is percent-encoded exactly this way
+(`::` → `%3A%3A`). `npm run wc-signin` drives Sign-In against a **real phone** (see
 below), and the storefront's one-tap checkout pushes `prepareExecuteAndWait` to a
 signed-in wallet.
 

@@ -10,8 +10,9 @@
 // the tests — share one definition of what crosses the wire.
 
 /** WalletConnect namespace for Canton. WalletConnect groups a session's chains,
- *  methods and accounts under a namespace key (`eip155` for Ethereum); Canton
- *  has no registered one, so this reference defines `canton`. */
+ *  methods and accounts under a namespace key (`eip155` for Ethereum); for
+ *  Canton it is `canton` — the namespace WalletConnect's published Canton chain
+ *  support defines (`canton:<network-id>`). */
 export const CANTON_NAMESPACE = 'canton';
 
 /** The methods this reference carries over a session, as JSON-RPC method names.
