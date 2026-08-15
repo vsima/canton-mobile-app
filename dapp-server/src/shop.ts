@@ -56,7 +56,12 @@ export interface CartCheckout {
  * the order id in its memo. The order's description is the item summary the
  * wallet shows on review. Throws on an empty cart or an unknown product.
  */
-export function checkoutCart(items: CartItem[], merchantParty: string, orders: OrderBook): CartCheckout {
+export function checkoutCart(
+  items: CartItem[],
+  merchantParty: string,
+  orders: OrderBook,
+  instrumentAdmin?: string,
+): CartCheckout {
   if (items.length === 0) throw new Error('cart is empty');
   const lineItems: LineItem[] = [];
   let totalScaled = 0n;
@@ -82,6 +87,7 @@ export function checkoutCart(items: CartItem[], merchantParty: string, orders: O
     payTo: merchantParty,
     amount: total,
     instrumentId: INSTRUMENT_ID,
+    ...(instrumentAdmin !== undefined && instrumentAdmin !== '' ? { instrumentAdmin } : {}),
     description,
   });
   return { order, lineItems, total };

@@ -17,6 +17,13 @@ export interface Order {
   amount: string;
   /** If set, the payment's instrument id (e.g. `Amulet`) must match. */
   instrumentId?: string;
+  /**
+   * If set, the payment's instrument *admin* must match too. An instrument is
+   * the pair `(admin, id)`; the id alone is an issuer-chosen label anyone can
+   * reuse, so `Amulet` is only authoritative under the DSO's admin party. Pin
+   * this to reject a counterfeit look-alike minted under someone else's admin.
+   */
+  instrumentAdmin?: string;
   /** A human label for what's being bought — shown when the wallet reviews it. */
   description?: string;
   /** What the payer must reference in the transfer memo; defaults to the id. */
@@ -32,6 +39,7 @@ export interface CreateOrder {
   payTo: string;
   amount: string;
   instrumentId?: string;
+  instrumentAdmin?: string;
   description?: string;
   memo?: string;
 }
@@ -68,6 +76,7 @@ export class OrderBook {
       payTo: input.payTo,
       amount: input.amount,
       ...(input.instrumentId !== undefined ? { instrumentId: input.instrumentId } : {}),
+      ...(input.instrumentAdmin !== undefined ? { instrumentAdmin: input.instrumentAdmin } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
       memo: input.memo !== undefined && input.memo !== '' ? input.memo : id,
       status: 'pending',
@@ -87,9 +96,9 @@ export class OrderBook {
 
   /**
    * Settles the first pending order this payment satisfies — right party, memo
-   * reference, an equal-or-greater amount, and (if the order named one) the
-   * right instrument — and returns it. Returns null if nothing matched, so an
-   * unrelated payment is simply ignored.
+   * reference, an equal-or-greater amount, and (if the order named them) the
+   * right instrument id *and admin* — and returns it. Returns null if nothing
+   * matched, so an unrelated payment is simply ignored.
    */
   settleFrom(payment: IncomingPayment, now: Date = new Date()): Order | null {
     for (const order of this.orders.values()) {
@@ -97,6 +106,10 @@ export class OrderBook {
       if (payment.receiver !== order.payTo) continue;
       if (payment.memo !== order.memo) continue;
       if (order.instrumentId !== undefined && payment.instrument.id !== order.instrumentId) continue;
+      // An instrument is (admin, id): the id is a reusable label, so without the
+      // admin check a token minted under an attacker's admin but named `Amulet`
+      // would settle a real order. Enforce the admin whenever the order pins one.
+      if (order.instrumentAdmin !== undefined && payment.instrument.admin !== order.instrumentAdmin) continue;
       if (scaledAmount(payment.amount) < scaledAmount(order.amount)) continue;
 
       order.status = 'settled';

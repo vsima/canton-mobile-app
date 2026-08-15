@@ -86,6 +86,32 @@ test('the wrong party, wrong memo, or wrong instrument does not settle', () => {
   assert.equal(book.settleFrom(payment({ memo: order.memo }))?.id, order.id);
 });
 
+test('an order pinning the admin rejects a look-alike token under another admin', () => {
+  const book = new OrderBook();
+  const DSO = 'DSO::1220dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+  const order = book.create({ payTo: MERCHANT, amount: '5', instrumentId: 'Amulet', instrumentAdmin: DSO });
+
+  // Same id ("Amulet"), same amount and memo, but minted under an attacker's
+  // own admin — must not settle, or the merchant ships for a worthless token.
+  const counterfeit = payment({
+    memo: order.memo,
+    instrument: { admin: 'attacker::1220eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', id: 'Amulet' },
+  });
+  assert.equal(book.settleFrom(counterfeit), null);
+  assert.equal(book.get(order.id)?.status, 'pending');
+
+  // The genuine (admin, id) pair settles it.
+  assert.equal(book.settleFrom(payment({ memo: order.memo, instrument: { admin: DSO, id: 'Amulet' } }))?.id, order.id);
+});
+
+test('an order without a pinned admin still matches on id alone', () => {
+  const book = new OrderBook();
+  const order = book.create({ payTo: MERCHANT, amount: '5', instrumentId: 'Amulet' });
+  // No instrumentAdmin pinned, so any admin with the right id settles (the
+  // closed-LocalNet default; INSTRUMENT_ADMIN pins it when issuers are untrusted).
+  assert.equal(book.settleFrom(payment({ memo: order.memo, instrument: { admin: 'whoever::1220', id: 'Amulet' } }))?.id, order.id);
+});
+
 test('a settled order is not settled twice', () => {
   const book = new OrderBook();
   const order = book.create({ payTo: MERCHANT, amount: '5' });

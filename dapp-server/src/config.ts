@@ -30,6 +30,11 @@ export interface Config {
   /** The merchant party the ledger watcher settles orders against. When unset,
    *  orders still work but nothing auto-settles (no party to watch). */
   merchantParty?: string;
+  /** The authoritative admin of the instrument to accept (the DSO party, for
+   *  `Amulet`). When set, orders pin `(admin, id)` so a look-alike token minted
+   *  under another admin can't settle them. When unset, only the id is checked
+   *  — fine for a closed LocalNet demo, unsafe against untrusted issuers. */
+  instrumentAdmin?: string;
   /** How often the watcher polls for new payments. */
   watchIntervalMs: number;
   /** JSON Ledger API of the merchant party's participant. */
@@ -59,6 +64,7 @@ export function loadConfig(): Config {
   const port = int('PORT', 8088);
   const domain = str('DAPP_DOMAIN', `localhost:${port}`);
   const merchantParty = process.env['MERCHANT_PARTY'];
+  const instrumentAdmin = process.env['INSTRUMENT_ADMIN'];
   return {
     port,
     domain,
@@ -69,6 +75,7 @@ export function loadConfig(): Config {
     shopName: str('SHOP_NAME', 'Canton Corner'),
     publicUrl: str('PUBLIC_URL', `http://localhost:${port}`),
     ...(merchantParty !== undefined && merchantParty !== '' ? { merchantParty } : {}),
+    ...(instrumentAdmin !== undefined && instrumentAdmin !== '' ? { instrumentAdmin } : {}),
     watchIntervalMs: int('WATCH_INTERVAL_MS', 4000),
     // LocalNet defaults (the SDK's localNetStaticConfig values).
     ledgerClientUrl: str('LEDGER_URL', 'http://localhost:2975/'),

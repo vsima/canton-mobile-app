@@ -47,6 +47,17 @@ test('checkoutCart sums quantities across multiple items', () => {
   assert.equal(lineItems.find((l) => l.id === 'mug')?.subtotal, '8');
 });
 
+test('checkoutCart stamps the expected instrument admin when given one', () => {
+  const orders = new OrderBook();
+  const DSO = 'DSO::1220dddd';
+  const withAdmin = checkoutCart([{ productId: 'coffee', quantity: 1 }], MERCHANT, orders, DSO);
+  assert.equal(withAdmin.order.instrumentAdmin, DSO);
+
+  // Omitted (or empty) leaves the order unpinned — id-only matching.
+  const noAdmin = checkoutCart([{ productId: 'coffee', quantity: 1 }], MERCHANT, orders);
+  assert.equal(noAdmin.order.instrumentAdmin, undefined);
+});
+
 test('an unknown product, empty cart, or bad quantity is rejected', () => {
   assert.throws(() => checkoutCart([{ productId: 'spaceship', quantity: 1 }], MERCHANT, new OrderBook()), /no such product/);
   assert.throws(() => checkoutCart([], MERCHANT, new OrderBook()), /empty/);

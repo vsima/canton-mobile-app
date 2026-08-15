@@ -226,10 +226,11 @@ function showCart() {
 function doCheckout() {
   var items = cartIds().map(function (id) { return { productId: id, quantity: cart[id] }; });
   if (items.length === 0) return;
-  // Include the signed-in party so a connected wallet gets the payment pushed to
-  // it (one-tap pay); otherwise the server just returns the scan-to-pay QR.
+  // Include this browser's own sign-in session id so a connected wallet gets the
+  // payment pushed to it (one-tap pay); otherwise the server just returns the
+  // scan-to-pay QR. The id — not the party — is what proves we own the session.
   var payload = { items: items };
-  if (signedInParty) payload.party = signedInParty;
+  if (signedInSessionId) payload.sessionId = signedInSessionId;
   fetch('/shop/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -282,11 +283,15 @@ function showCheckout(data) {
     // One-tap pay: the payment was pushed to the signed-in wallet. Primary state
     // is "check your phone"; the QR moves into the manual fallback panel.
     var status = h('div', { 'class': 'statusbar', id: 'status' }, [h('div', { 'class': 'spinner' }), h('span', { text: 'Waiting for approval…' })]);
+    // shortParty carries the wallet-supplied party hint, which is attacker-
+    // controllable — build these nodes with textContent (h's text attr), never
+    // innerHTML, so a crafted hint can't inject markup.
     var who = signedInParty ? ' (' + shortParty(signedInParty) + ')' : '';
-    var push = h('div', { 'class': 'pushbox' });
-    push.innerHTML = '<div class="push-emoji">📲</div>' +
-      '<div class="push-title">Check your phone</div>' +
-      '<div class="push-sub">Approve the payment in your wallet' + who + '.</div>';
+    var push = h('div', { 'class': 'pushbox' }, [
+      h('div', { 'class': 'push-emoji', text: '📲' }),
+      h('div', { 'class': 'push-title', text: 'Check your phone' }),
+      h('div', { 'class': 'push-sub', text: 'Approve the payment in your wallet' + who + '.' }),
+    ]);
     var cols = h('div', { 'class': 'checkout-cols' }, [push, summaryPanel(data.lineItems, data.total)]);
     app.appendChild(h('div', {}, [status, cols, manualPanel(data.payment, data.checkout), h('div', { style: 'margin-top:14px' }, [back])]));
     return;
@@ -344,6 +349,7 @@ function confetti() {
 // --- sign in with wallet (WalletConnect) -----------------------------------
 
 var signedInParty = null;
+var signedInSessionId = null;
 
 function shortParty(p) {
   var i = p.indexOf('::');
@@ -364,15 +370,20 @@ function renderSigninButton() {
   }
 }
 
-function setSignedIn(party) {
+function setSignedIn(party, sessionId) {
   signedInParty = party;
-  try { localStorage.setItem('siwc-party', party); } catch (e) {}
+  signedInSessionId = sessionId || null;
+  try {
+    localStorage.setItem('siwc-party', party);
+    if (signedInSessionId) localStorage.setItem('siwc-session', signedInSessionId);
+  } catch (e) {}
   renderSigninButton();
 }
 
 function signOut() {
   signedInParty = null;
-  try { localStorage.removeItem('siwc-party'); } catch (e) {}
+  signedInSessionId = null;
+  try { localStorage.removeItem('siwc-party'); localStorage.removeItem('siwc-session'); } catch (e) {}
   renderSigninButton();
   showCatalog();
 }
@@ -424,7 +435,7 @@ function closeSignInDialog() {
 function pollSignIn(id) {
   signinTimer = setInterval(function () {
     fetch('/siwc-wc/status/' + id).then(function (r) { return r.json(); }).then(function (data) {
-      if (data.status === 'signed-in') { clearInterval(signinTimer); signinTimer = null; onSignedIn(data.party); }
+      if (data.status === 'signed-in') { clearInterval(signinTimer); signinTimer = null; onSignedIn(data.party, id); }
       else if (data.status === 'failed') { clearInterval(signinTimer); signinTimer = null; setSiStatus('Sign-in failed: ' + (data.reason || 'declined'), false); }
     }).catch(function () {});
   }, 1500);
@@ -432,8 +443,8 @@ function pollSignIn(id) {
 
 // Flash a success state in the dialog, then close it — the catalog is still
 // there underneath, and the sign-in button now shows the address.
-function onSignedIn(party) {
-  setSignedIn(party);
+function onSignedIn(party, sessionId) {
+  setSignedIn(party, sessionId);
   var dlg = document.getElementById('signin-dialog');
   var check = h('div', {});
   check.innerHTML = '<svg viewBox="0 0 52 52" class="checkmark"><circle class="ck-circle" cx="26" cy="26" r="24"/><path class="ck-check" d="M14 27l7 7 16-16"/></svg>';
@@ -452,7 +463,7 @@ function onSignedIn(party) {
 document.title = CONFIG.shop;
 var sn = document.getElementById('shopname');
 if (sn) sn.textContent = '🛍️ ' + CONFIG.shop;
-try { signedInParty = localStorage.getItem('siwc-party'); } catch (e) {}
+try { signedInParty = localStorage.getItem('siwc-party'); signedInSessionId = localStorage.getItem('siwc-session'); } catch (e) {}
 renderSigninButton();
 fetch('/shop').then(function (r) { return r.json(); }).then(function (data) { PRODUCTS = data.products || []; showCatalog(); });
 </script>
