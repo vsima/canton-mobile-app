@@ -100,8 +100,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.vsima.canton.wallet.Holding
 import io.github.vsima.canton.wallet.TokenStandardClient
 import io.github.vsima.canton.wallet.TransferDirection
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Payments
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import io.github.vsima.canton.dapp.wallet.DappApproval
 import io.github.vsima.canton.dapp.wallet.DappApprovalRequest
+import io.github.vsima.canton.dapp.wallet.DappCommandSummary
+import io.github.vsima.canton.dapp.wallet.DappPeer
 import androidx.compose.material.icons.outlined.Link
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -1283,8 +1294,17 @@ private fun WcApprovalSheet(model: WalletModel) {
         ) {
             when (val request = approval.request) {
                 is DappApprovalRequest.Connection -> {
-                    Text("Connect", style = MaterialTheme.typography.titleLarge)
-                    Text("“${request.peer.name}” wants to connect and see your Canton account.")
+                    ApprovalHeader(
+                        icon = Icons.Outlined.Link,
+                        tint = MaterialTheme.colorScheme.primary,
+                        title = "Connect",
+                        peer = request.peer,
+                    )
+                    Text(
+                        "Wants to see your Canton account. Sign-ins and payments it asks for later " +
+                            "each come back to this phone for approval.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     SectionHeader("Account")
                     SelectionContainer {
                         Text(
@@ -1293,6 +1313,7 @@ private fun WcApprovalSheet(model: WalletModel) {
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    ApprovalFactRow("Network", request.network.networkId)
                     WcApprovalButtons(
                         approveLabel = "Connect",
                         onApprove = { approval.resolve(DappApproval.Approved(request.available)) },
@@ -1300,11 +1321,34 @@ private fun WcApprovalSheet(model: WalletModel) {
                     )
                 }
                 is DappApprovalRequest.Message -> {
-                    Text("Sign in", style = MaterialTheme.typography.titleLarge)
-                    Text("“${request.peer.name}” asks you to sign a message with your Canton account.")
+                    ApprovalHeader(
+                        icon = Icons.Outlined.Key,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        title = "Sign in",
+                        peer = request.peer,
+                    )
+                    Text(
+                        "Asks you to sign the message below. Signing proves you control your party; " +
+                            "it moves no funds.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     SectionHeader("Message")
-                    SelectionContainer {
-                        Text(request.message, style = MaterialTheme.typography.bodySmall)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .heightIn(max = 180.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(12.dp),
+                    ) {
+                        SelectionContainer {
+                            Text(
+                                request.message,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                     WcApprovalButtons(
                         approveLabel = "Sign",
@@ -1313,8 +1357,71 @@ private fun WcApprovalSheet(model: WalletModel) {
                     )
                 }
                 is DappApprovalRequest.Transaction -> {
-                    Text("Approve transaction", style = MaterialTheme.typography.titleLarge)
-                    Text("“${request.peer.name}” asks you to approve a transaction with ${request.actAs.partyId.take(24)}….")
+                    val transfer = remember(request) { DappCommandSummary.transferOf(request.submission) }
+                    ApprovalHeader(
+                        icon = Icons.Outlined.Payments,
+                        tint = TransactionAccent,
+                        title = if (transfer != null) "Payment request" else "Approve transaction",
+                        peer = request.peer,
+                    )
+                    if (transfer != null) {
+                        Text(
+                            "${transfer.amount} ${if (transfer.instrumentId == "Amulet") "CC" else transfer.instrumentId}",
+                            style = MaterialTheme.typography.displaySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        SectionHeader("To")
+                        SelectionContainer {
+                            Text(
+                                transfer.receiver,
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        transfer.memo?.let { memo ->
+                            SectionHeader("Memo")
+                            Text(memo, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        ApprovalFactRow("From", request.actAs.partyId.take(24) + "…", mono = true)
+                        ApprovalFactRow("Network", request.network.networkId)
+                    } else {
+                        // Not a token-standard transfer: never guess. Name each
+                        // command and show the raw payload so what is on screen
+                        // is exactly what was asked.
+                        Text(
+                            "Asks you to sign a transaction that is not a standard token transfer. " +
+                                "Review its commands:",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        DappCommandSummary.describe(request.submission).forEach { line ->
+                            Text("• $line", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.medium)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .heightIn(max = 160.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(12.dp),
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    request.submission.commands.toString(),
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                        ApprovalFactRow("Acting as", request.actAs.partyId.take(24) + "…", mono = true)
+                        ApprovalFactRow("Network", request.network.networkId)
+                    }
+                    Text(
+                        "Prepared on your participant. This phone re-verifies the transaction " +
+                            "hash before your hardware key signs.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     WcApprovalButtons(
                         approveLabel = "Approve",
                         onApprove = { approval.resolve(DappApproval.Approved()) },
@@ -1323,6 +1430,87 @@ private fun WcApprovalSheet(model: WalletModel) {
                 }
             }
         }
+    }
+}
+
+/** Accent for the sheet that moves funds; the brand orange, deliberately not
+ *  a theme color so it reads the same in light and dark. */
+private val TransactionAccent = Color(0xFFE8502F)
+
+/**
+ * The identity block every approval sheet leads with: what kind of request
+ * (icon + title) and who is asking (peer name, origin, and whether the
+ * transport could verify that identity). A WalletConnect peer names itself,
+ * so an unverified name is shown as a claim, not an identity.
+ */
+@Composable
+private fun ApprovalHeader(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    title: String,
+    peer: DappPeer,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(tint.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    peer.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                if (!peer.verified) {
+                    Text(
+                        "Unverified",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            peer.url?.let { url ->
+                Text(
+                    url.removePrefix("https://").removePrefix("http://"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** One label + value line of an approval sheet. */
+@Composable
+private fun ApprovalFactRow(label: String, value: String, mono: Boolean = false) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = if (mono) FontFamily.Monospace else null,
+        )
     }
 }
 

@@ -800,7 +800,7 @@ class WalletModel(
     // TEE driver over the domain-separated bytes). The Reown client that moves
     // the frames lives in WalletConnectController; nothing here touches it.
 
-    private var cantonWc: CantonWalletConnect? = null
+    private var cantonWc: Boolean = false
 
     /** The engine's approval delegate: suspends, surfacing the request as
      *  [pendingApproval] until the sheet answers it. */
@@ -841,13 +841,13 @@ class WalletModel(
         )
     }
 
-    /** Builds the provider engine + WalletConnect adapter once the wallet is
-     *  ready, and registers them with the Reown binding. Idempotent. */
+    /** Builds the provider engine + WalletConnect adapter factory once the
+     *  wallet is ready, and registers them with the Reown binding. Idempotent. */
     fun enableDappConnect() {
         val d = driver
         val authed = authedChannel
         val sync = synchronizerId
-        if (cantonWc != null || partyId == null || d == null || authed == null || sync == null) return
+        if (cantonWc || partyId == null || d == null || authed == null || sync == null) return
         // The CIP-0103 prepareExecute pipeline: a dApp's commands are prepared on
         // this participant (JSON), the prepared-tx hash is verified, signed in the
         // TEE, and executed (gRPC). This is what lets the wallet accept a pushed
@@ -862,23 +862,34 @@ class WalletModel(
             signer = d,
             userId = WalletEnvironment.userId,
         )
-        val session = DappSession(
-            peer = DappPeer(id = "walletconnect", name = "dApp (WalletConnect)"),
-            accounts = DappAccountsSource { dappAccounts() },
-            approver = approver,
-            network = DappNetworkConfig(
-                networkId = DAPP_NETWORK_ID,
-                jsonApiBaseUrl = WalletEnvironment.jsonLedgerApiUrl,
-                synchronizerId = sync,
-            ),
-            messageSigner = messageSigner,
-            prepareExecute = prepareExecute,
-        )
-        val adapter = CantonWalletConnect(session, DAPP_NETWORK_ID)
-        cantonWc = adapter
+        cantonWc = true
         WalletConnectController.onStatus = { line -> scope.launch { wcStatus = line } }
         WalletConnectController.onSessions = { list -> scope.launch { wcSessions = list } }
-        WalletConnectController.register(adapter, accounts = { dappAccounts() })
+        // One DappSession per peer, built when that peer's first request
+        // arrives: the session holds the peer's grant, and the peer identity
+        // (from the WalletConnect session metadata) is what the approval
+        // sheets render. A shared session would show every dApp under one
+        // placeholder name and pool their grants.
+        WalletConnectController.register(
+            networkId = DAPP_NETWORK_ID,
+            accounts = { dappAccounts() },
+        ) { peer ->
+            CantonWalletConnect(
+                DappSession(
+                    peer = peer,
+                    accounts = DappAccountsSource { dappAccounts() },
+                    approver = approver,
+                    network = DappNetworkConfig(
+                        networkId = DAPP_NETWORK_ID,
+                        jsonApiBaseUrl = WalletEnvironment.jsonLedgerApiUrl,
+                        synchronizerId = sync,
+                    ),
+                    messageSigner = messageSigner,
+                    prepareExecute = prepareExecute,
+                ),
+                DAPP_NETWORK_ID,
+            )
+        }
         WalletConnectController.refreshSessions()
         Log.i("WALLET", "WalletConnect enabled for ${partyId?.take(24)}…")
     }

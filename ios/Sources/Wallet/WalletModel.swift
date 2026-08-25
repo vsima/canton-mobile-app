@@ -71,7 +71,7 @@ final class WalletModel {
     private(set) var wcStatus: String?
     /// Active WalletConnect sessions, shown on the Connect screen.
     private(set) var wcSessions: [WcSessionInfo] = []
-    private var cantonWc: CantonWalletConnect?
+    private var cantonWc = false
 
     /// A checkout URL delivered by a `canton-checkout:` deep link (`.onOpenURL`),
     /// awaiting the Send view to parse and prefill it.
@@ -614,7 +614,7 @@ final class WalletModel {
     /// Builds the provider engine + WalletConnect adapter once the wallet is
     /// ready, and registers them with the Reown binding. Idempotent.
     func enableDappConnect() {
-        guard cantonWc == nil, partyId != nil,
+        guard !cantonWc, partyId != nil,
               let client, let driver, let synchronizerId else { return }
         // The CIP-0103 prepareExecute pipeline: a dApp's commands are prepared on
         // this participant (JSON Ledger API), the prepared-tx hash is verified,
@@ -636,26 +636,36 @@ final class WalletModel {
             signer: driver,
             userId: capturedEnv.userId
         )
-        let session = DappSession(
-            peer: DappPeer(id: "walletconnect", name: "dApp (WalletConnect)"),
-            accounts: ClosureAccountsSource { [weak self] in await self?.dappAccounts() ?? [] },
-            approver: ClosureApprover { [weak self] request in
-                await self?.awaitApproval(request) ?? .rejected(reason: "wallet unavailable")
-            },
-            network: DappNetworkConfig(
-                networkId: Self.dappNetworkId,
-                jsonApiBaseUrl: capturedEnv.jsonLedgerApiURL,
-                synchronizerId: synchronizerId
-            ),
-            messageSigner: HexMessageSigner(driver: driver),
-            prepareExecute: pipeline
-        )
-        guard let adapter = try? CantonWalletConnect(handler: session, networkId: Self.dappNetworkId) else { return }
-        cantonWc = adapter
+        cantonWc = true
         let controller = WalletConnectController.shared
         controller.onStatus = { [weak self] line in self?.wcStatus = line }
         controller.onSessions = { [weak self] list in self?.wcSessions = list }
-        controller.register(adapter: adapter, accounts: { [weak self] in await self?.dappAccounts() ?? [] })
+        // One DappSession per peer, built when that peer's first request
+        // arrives: the session holds the peer's grant, and the peer identity
+        // (from the WalletConnect session metadata) is what the approval
+        // sheets render. A shared session would show every dApp under one
+        // placeholder name and pool their grants.
+        controller.register(
+            networkId: Self.dappNetworkId,
+            accounts: { [weak self] in await self?.dappAccounts() ?? [] }
+        ) { [weak self] peer in
+            guard let self else { return nil }
+            let session = DappSession(
+                peer: peer,
+                accounts: ClosureAccountsSource { [weak self] in await self?.dappAccounts() ?? [] },
+                approver: ClosureApprover { [weak self] request in
+                    await self?.awaitApproval(request) ?? .rejected(reason: "wallet unavailable")
+                },
+                network: DappNetworkConfig(
+                    networkId: Self.dappNetworkId,
+                    jsonApiBaseUrl: capturedEnv.jsonLedgerApiURL,
+                    synchronizerId: synchronizerId
+                ),
+                messageSigner: HexMessageSigner(driver: self.driver ?? driver),
+                prepareExecute: pipeline
+            )
+            return try? CantonWalletConnect(handler: session, networkId: Self.dappNetworkId)
+        }
         print("WALLET: WalletConnect enabled for \(partyId?.prefix(24) ?? "")…")
     }
 
