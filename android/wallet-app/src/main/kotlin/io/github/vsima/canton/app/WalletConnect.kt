@@ -155,7 +155,13 @@ object WalletConnectController {
         }
         scope.launch {
             try {
-                val ns = CantonWalletConnect.sessionNamespaces(Caip.chainId(networkId), accounts())
+                // Approve the methods the dApp asked for that the engine can
+                // serve: the ecosystem proposes canton_-prefixed names, a
+                // CIP-0103-verbatim dApp proposes bare ones, and both clients
+                // refuse any request outside the approved set.
+                val requested = (proposal.requiredNamespaces.values + proposal.optionalNamespaces.values)
+                    .flatMap { it.methods }
+                val ns = CantonWalletConnect.sessionNamespaces(Caip.chainId(networkId), accounts(), requested)
                 val namespaces = mapOf(
                     Caip.CANTON_NAMESPACE to Wallet.Model.Namespace.Session(
                         chains = ns.chains,

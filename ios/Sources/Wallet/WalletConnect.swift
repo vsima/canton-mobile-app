@@ -187,8 +187,19 @@ final class WalletConnectController {
         }
         let proposalId = proposal.id
         let name = proposal.proposer.name.isEmpty ? "dApp" : proposal.proposer.name
+        // Approve the methods the dApp asked for that the engine can serve:
+        // the ecosystem proposes canton_-prefixed names, a CIP-0103-verbatim
+        // dApp proposes bare ones, and both clients refuse any request
+        // outside the approved set.
+        let requested = (Array(proposal.requiredNamespaces.values)
+            + Array((proposal.optionalNamespaces ?? [:]).values))
+            .flatMap { Array($0.methods) }
         Task {
-            let ns = CantonWalletConnect.sessionNamespaces(chainId: chainId, accounts: await accountsProvider())
+            let ns = CantonWalletConnect.sessionNamespaces(
+                chainId: chainId,
+                accounts: await accountsProvider(),
+                requestedMethods: requested
+            )
             await approveSession(proposalId: proposalId, name: name, namespaces: ns)
         }
     }

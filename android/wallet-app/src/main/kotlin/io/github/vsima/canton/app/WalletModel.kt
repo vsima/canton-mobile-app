@@ -718,7 +718,9 @@ class WalletModel(
                 receiver = receiver,
                 amount = FAUCET_SEND_CC,
                 instrumentId = instrument,
-                requestedAt = java.time.Instant.now(),
+                // Backdated like TokenStandardClient's default: a device clock
+                // seconds ahead of ledger time fails deadline-not-exceeded.
+                requestedAt = java.time.Instant.now().minus(TokenStandardClient.clockSkewAllowance),
                 executeBefore = java.time.Instant.now().plusSeconds(24 * 3600),
                 inputHoldingCids = inputs.map { it.contractId },
                 meta = mapOf(MEMO_KEY to "Test funds"),

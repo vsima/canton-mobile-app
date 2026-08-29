@@ -482,7 +482,9 @@ final class WalletModel {
                 receiver: receiver,
                 amount: Self.faucetSendCc,
                 instrumentId: instrument,
-                requestedAt: Date(),
+                // Backdated like TokenStandardClient's default: a device clock
+                // seconds ahead of ledger time fails deadline-not-exceeded.
+                requestedAt: Date().addingTimeInterval(-TokenStandardClient.clockSkewAllowance),
                 executeBefore: Date().addingTimeInterval(24 * 3600),
                 inputHoldingCids: inputs.map(\.contractId),
                 meta: [Self.memoKey: "Test funds"]
