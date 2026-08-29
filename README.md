@@ -80,8 +80,10 @@ end-to-end on both phones; the QR flow above stays the zero-relay, offline path.
 - **Self-custody on device hardware.** External-party onboarding with keys in
   the Secure Enclave (iOS) or Android Keystore (StrongBox with TEE fallback),
   never leaving the device. The signer sheet reports the achieved security level
-  honestly — including "software" in simulators. *Proves: `SigningDriver`,
-  `ExternalPartyClient`.*
+  honestly — including "software" in simulators. Verified live on StrongBox: a
+  Pixel 11 Pro Fold (Android 17) onboarded with a StrongBox-resident key and
+  ran the full agent payment flow, every signature in the secure element.
+  *Proves: `SigningDriver`, `ExternalPartyClient`.*
 - **Verify before signing.** Every externally-signed transaction goes through
   the SDK's client-side prepared-transaction hash verification: the hardware key
   only signs a hash the device recomputed from the transaction itself. *Proves:
