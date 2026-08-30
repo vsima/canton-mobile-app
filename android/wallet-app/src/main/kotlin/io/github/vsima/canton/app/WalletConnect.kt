@@ -10,6 +10,7 @@ import com.reown.android.CoreClient
 import com.reown.walletkit.client.Wallet
 import com.reown.walletkit.client.WalletKit
 import io.github.vsima.canton.dapp.DappWallet
+import io.github.vsima.canton.dapp.wallet.DappPeer
 import io.github.vsima.canton.dapp.wc.Caip
 import io.github.vsima.canton.dapp.wc.CantonWalletConnect
 import io.github.vsima.canton.dapp.wc.WcRequest
@@ -39,8 +40,16 @@ data class WcSessionInfo(val topic: String, val name: String, val url: String)
 
 object WalletConnectController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var adapter: CantonWalletConnect? = null
+    private var networkId: String? = null
+    private var adapterFactory: ((DappPeer) -> CantonWalletConnect)? = null
     private var accounts: (suspend () -> List<DappWallet>)? = null
+
+    /** One adapter (and so one `DappSession` + grant) per session topic. */
+    private val adapters = mutableMapOf<String, CantonWalletConnect>()
+
+    /** Peer display names by topic, for the disconnect status line: the
+     *  session is already gone from WalletKit when its delete event fires. */
+    private val peerNames = mutableMapOf<String, String>()
 
     /** Set by [WalletModel] to surface status lines on the Connect screen. */
     var onStatus: ((String) -> Unit)? = null
@@ -48,10 +57,51 @@ object WalletConnectController {
     /** Set by [WalletModel] to surface the active sessions on the Connect screen. */
     var onSessions: ((List<WcSessionInfo>) -> Unit)? = null
 
-    /** Registers the wallet's adapter + the accounts it may share. */
-    fun register(adapter: CantonWalletConnect, accounts: suspend () -> List<DappWallet>) {
-        this.adapter = adapter
+    /**
+     * Registers the accounts the wallet may share and the per-peer adapter
+     * factory. The factory runs on a peer's first request, with the peer
+     * built from that WalletConnect session's own metadata; see [adapterFor].
+     */
+    fun register(
+        networkId: String,
+        accounts: suspend () -> List<DappWallet>,
+        adapterFactory: (DappPeer) -> CantonWalletConnect,
+    ) {
+        this.networkId = networkId
         this.accounts = accounts
+        this.adapterFactory = adapterFactory
+        synchronized(adapters) { adapters.clear() }
+    }
+
+    /**
+     * The adapter for [topic], created on first use with the peer identity
+     * the transport can attest: the WalletConnect session's peer metadata
+     * (self-reported, so `verified` only when Reown's Verify API vouched for
+     * the origin in [verify]).
+     */
+    private fun adapterFor(topic: String, verify: Wallet.Model.VerifyContext?): CantonWalletConnect? {
+        val factory = adapterFactory ?: return null
+        synchronized(adapters) {
+            return adapters.getOrPut(topic) {
+                val meta = try {
+                    WalletKit.getActiveSessionByTopic(topic)?.metaData
+                } catch (e: Throwable) {
+                    Log.i("WALLET", "WC: session lookup for $topic failed: $e")
+                    null
+                }
+                val name = meta?.name?.takeIf { it.isNotBlank() } ?: "Unidentified dApp"
+                peerNames[topic] = name
+                factory(
+                    DappPeer(
+                        id = topic,
+                        name = name,
+                        url = meta?.url?.takeIf { it.isNotBlank() },
+                        iconUrl = meta?.icons?.firstOrNull { it.isNotBlank() },
+                        verified = verify?.validation == Wallet.Model.Validation.VALID,
+                    ),
+                )
+            }
+        }
     }
 
     /** Reads WalletKit's active sessions and pushes them to the UI. */
@@ -69,11 +119,24 @@ object WalletConnectController {
 
     /** Disconnects a session by topic. */
     fun disconnect(topic: String) {
+        synchronized(adapters) { adapters.remove(topic) }
         WalletKit.disconnectSession(
             Wallet.Params.SessionDisconnect(sessionTopic = topic),
             onSuccess = { refreshSessions() },
             onError = { error -> status("Disconnect failed: ${error.throwable.message}") },
         )
+    }
+
+    /** The dApp side (or the relay) ended a session. */
+    fun onSessionDelete(delete: Wallet.Model.SessionDelete) {
+        if (delete is Wallet.Model.SessionDelete.Success) {
+            val name = synchronized(adapters) {
+                adapters.remove(delete.topic)
+                peerNames.remove(delete.topic)
+            }
+            status("${name ?: "A dApp"} disconnected")
+        }
+        refreshSessions()
     }
 
     /** Hands a `wc:` pairing URI to the relay. */
@@ -84,15 +147,21 @@ object WalletConnectController {
     }
 
     fun onSessionProposal(proposal: Wallet.Model.SessionProposal) {
-        val adapter = adapter
+        val networkId = networkId
         val accounts = accounts
-        if (adapter == null || accounts == null) {
+        if (networkId == null || accounts == null || adapterFactory == null) {
             reject(proposal, "Wallet not ready")
             return
         }
         scope.launch {
             try {
-                val ns = adapter.sessionNamespaces(accounts())
+                // Approve the methods the dApp asked for that the engine can
+                // serve: the ecosystem proposes canton_-prefixed names, a
+                // CIP-0103-verbatim dApp proposes bare ones, and both clients
+                // refuse any request outside the approved set.
+                val requested = (proposal.requiredNamespaces.values + proposal.optionalNamespaces.values)
+                    .flatMap { it.methods }
+                val ns = CantonWalletConnect.sessionNamespaces(Caip.chainId(networkId), accounts(), requested)
                 val namespaces = mapOf(
                     Caip.CANTON_NAMESPACE to Wallet.Model.Namespace.Session(
                         chains = ns.chains,
@@ -118,8 +187,8 @@ object WalletConnectController {
         }
     }
 
-    fun onSessionRequest(request: Wallet.Model.SessionRequest) {
-        val adapter = adapter ?: return
+    fun onSessionRequest(request: Wallet.Model.SessionRequest, verify: Wallet.Model.VerifyContext?) {
+        val adapter = adapterFor(request.topic, verify) ?: return
         scope.launch {
             val id = request.request.id
             val topic = request.topic
@@ -199,13 +268,13 @@ class WalletApplication : Application() {
         override fun onSessionRequest(
             sessionRequest: Wallet.Model.SessionRequest,
             verifyContext: Wallet.Model.VerifyContext,
-        ) = WalletConnectController.onSessionRequest(sessionRequest)
+        ) = WalletConnectController.onSessionRequest(sessionRequest, verifyContext)
 
         override val onSessionAuthenticate:
             ((Wallet.Model.SessionAuthenticate, Wallet.Model.VerifyContext) -> Unit)? = null
 
         override fun onSessionDelete(sessionDelete: Wallet.Model.SessionDelete) {
-            WalletConnectController.refreshSessions()
+            WalletConnectController.onSessionDelete(sessionDelete)
         }
         override fun onSessionExtend(session: Wallet.Model.Session) {}
         override fun onSessionSettleResponse(response: Wallet.Model.SettledSessionResponse) {}

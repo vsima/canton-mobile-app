@@ -4,6 +4,7 @@
 import Combine
 import Foundation
 import CantonDappKit
+import CantonDappWalletKit
 import CantonDappWCKit
 // RPCID / RPCResult / JSONRPCError are not Sendable-audited either; treat them
 // as pre-concurrency so an `RPCID` can be handed to a nonisolated responder.
@@ -37,10 +38,17 @@ final class WalletConnectController {
     static let shared = WalletConnectController()
     private init() {}
 
-    private var adapter: CantonWalletConnect?
+    private var networkId: String?
+    private var adapterFactory: ((DappPeer) -> CantonWalletConnect?)?
     private var accountsProvider: (@Sendable () async -> [DappWallet])?
     private var cancellables = Set<AnyCancellable>()
     private var configured = false
+
+    /// One adapter (and so one `DappSession` + grant) per session topic.
+    private var adapters: [String: CantonWalletConnect] = [:]
+    /// Peer display names by topic, for the disconnect status line: the
+    /// session is already gone from WalletKit when its delete event fires.
+    private var peerNames: [String: String] = [:]
 
     /// Set by ``WalletModel`` to surface status lines on the Connect screen.
     var onStatus: ((String) -> Void)?
@@ -79,19 +87,57 @@ final class WalletConnectController {
             .store(in: &cancellables)
         WalletKit.instance.sessionRequestPublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] output in self?.handleRequest(output.request) }
+            .sink { [weak self] output in self?.handleRequest(output.request, verify: output.context) }
             .store(in: &cancellables)
         WalletKit.instance.sessionsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in self?.publish(sessions) }
             .store(in: &cancellables)
+        WalletKit.instance.sessionDeletePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] (topic, _) in self?.handleDelete(topic: topic) }
+            .store(in: &cancellables)
     }
 
-    /// Registers the wallet's adapter + the accounts it may share.
-    func register(adapter: CantonWalletConnect, accounts: @escaping @Sendable () async -> [DappWallet]) {
-        self.adapter = adapter
+    /// Registers the accounts the wallet may share and the per-peer adapter
+    /// factory. The factory runs on a peer's first request, with the peer
+    /// built from that WalletConnect session's own metadata; see `adapterFor`.
+    func register(
+        networkId: String,
+        accounts: @escaping @Sendable () async -> [DappWallet],
+        adapterFactory: @escaping (DappPeer) -> CantonWalletConnect?
+    ) {
+        self.networkId = networkId
         self.accountsProvider = accounts
+        self.adapterFactory = adapterFactory
+        adapters.removeAll()
+        peerNames.removeAll()
         refreshSessions()
+    }
+
+    /// The adapter for `topic`, created on first use with the peer identity
+    /// the transport can attest: the WalletConnect session's peer metadata
+    /// (self-reported, so `verified` only when Reown's Verify API vouched for
+    /// the origin in `verify`).
+    private func adapterFor(topic: String, verify: VerifyContext?) -> CantonWalletConnect? {
+        if let existing = adapters[topic] { return existing }
+        guard let adapterFactory else { return nil }
+        let meta = WalletKit.instance.getSessions().first { $0.topic == topic }?.peer
+        let name = (meta?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Unidentified dApp"
+        let adapter = adapterFactory(
+            DappPeer(
+                id: topic,
+                name: name,
+                url: (meta?.url).flatMap { $0.isEmpty ? nil : $0 },
+                iconUrl: meta?.icons.first { !$0.isEmpty },
+                verified: verify?.validation == .valid
+            )
+        )
+        if let adapter {
+            adapters[topic] = adapter
+            peerNames[topic] = name
+        }
+        return adapter
     }
 
     /// Hands a scanned/pasted `wc:` pairing URI to the relay.
@@ -112,6 +158,8 @@ final class WalletConnectController {
 
     /// Disconnects a session by topic.
     func disconnect(topic: String) {
+        adapters[topic] = nil
+        peerNames[topic] = nil
         Task {
             do {
                 try await WalletKit.instance.disconnect(topic: topic)
@@ -120,17 +168,38 @@ final class WalletConnectController {
         }
     }
 
+    /// The dApp side (or the relay) ended a session.
+    private func handleDelete(topic: String) {
+        adapters[topic] = nil
+        let name = peerNames.removeValue(forKey: topic)
+        onStatus?("\(name ?? "A dApp") disconnected")
+        refreshSessions()
+    }
+
     // MARK: - Reown callbacks
 
     private func handleProposal(_ proposal: Session.Proposal) {
-        guard let adapter, let accountsProvider else {
+        guard let networkId, let accountsProvider, adapterFactory != nil,
+              let chainId = try? Caip.chainId(networkId)
+        else {
             reject(proposal, reason: "Wallet not ready")
             return
         }
         let proposalId = proposal.id
         let name = proposal.proposer.name.isEmpty ? "dApp" : proposal.proposer.name
+        // Approve the methods the dApp asked for that the engine can serve:
+        // the ecosystem proposes canton_-prefixed names, a CIP-0103-verbatim
+        // dApp proposes bare ones, and both clients refuse any request
+        // outside the approved set.
+        let requested = (Array(proposal.requiredNamespaces.values)
+            + Array((proposal.optionalNamespaces ?? [:]).values))
+            .flatMap { Array($0.methods) }
         Task {
-            let ns = adapter.sessionNamespaces(accounts: await accountsProvider())
+            let ns = CantonWalletConnect.sessionNamespaces(
+                chainId: chainId,
+                accounts: await accountsProvider(),
+                requestedMethods: requested
+            )
             await approveSession(proposalId: proposalId, name: name, namespaces: ns)
         }
     }
@@ -152,8 +221,8 @@ final class WalletConnectController {
         }
     }
 
-    private func handleRequest(_ request: Request) {
-        guard let adapter else { return }
+    private func handleRequest(_ request: Request, verify: VerifyContext?) {
+        guard let adapter = adapterFor(topic: request.topic, verify: verify) else { return }
         let topic = request.topic
         let requestId = request.id
         let wc = WcRequest(
