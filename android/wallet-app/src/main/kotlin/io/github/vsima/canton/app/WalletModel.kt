@@ -219,6 +219,10 @@ class WalletModel(
      *  on the Activity tab; drives the tab badge. */
     var unseenAgentEvents by mutableStateOf(0)
         private set
+
+    /** Per-peer spend policies, mirrored from [agentStore] for the roster. */
+    var dappPolicies by mutableStateOf<Map<String, io.github.vsima.canton.dapp.wallet.DappSpendPolicy>>(emptyMap())
+        private set
     /** True when the signing key is hardware-resident (StrongBox or TEE) —
      *  drives the trust copy, which must never overclaim. */
     var hardwareSigner by mutableStateOf(false)
@@ -950,8 +954,15 @@ class WalletModel(
                 Log.i("WALLET", "agent activity load failed: $e")
                 emptyList()
             }
+            val policies = try {
+                store.policies()
+            } catch (e: Exception) {
+                Log.i("WALLET", "agent policies load failed: $e")
+                emptyMap()
+            }
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 agentActivity = loaded
+                dappPolicies = policies
             }
         }
     }
@@ -967,6 +978,7 @@ class WalletModel(
     /** Persists the per-dApp policy; sessions read it fresh on every request. */
     fun setDappPolicy(peerId: String, policy: io.github.vsima.canton.dapp.wallet.DappSpendPolicy?) {
         agentStore?.setPolicy(peerId, policy)
+        dappPolicies = if (policy == null) dappPolicies - peerId else dappPolicies + (peerId to policy)
     }
 
     /** Hands a scanned/pasted `wc:` pairing URI to the Reown client. */

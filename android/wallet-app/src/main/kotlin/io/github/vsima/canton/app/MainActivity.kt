@@ -330,7 +330,7 @@ private fun WalletTabs(model: WalletModel) {
                 when (section) {
                     Section.Portfolio -> PortfolioScreen(model)
                     Section.Activity -> ActivityScreen(model)
-                    Section.Agents -> ConnectScreen(model)
+                    Section.Agents -> AgentsScreen(model)
                 }
             }
         }
@@ -1406,24 +1406,130 @@ private val ccFormat = java.text.DecimalFormat("0.0###")
 private fun java.math.BigDecimal.cc(): String = ccFormat.format(this)
 
 /**
- * Connect a dApp over WalletConnect: scan or paste a `wc:` link. The wallet
- * pairs, then the dApp's connect and each signature surface as approval sheets
- * ([WcApprovalSheet]) — the key never leaves the device.
+ * The agent roster: each connected agent or dApp with its spending limits at
+ * a glance; tap to manage. Pairing is the roster's one action, a `wc:` link
+ * scanned or pasted in the [ConnectSheet]. The dApp's connect and each
+ * signature surface as approval sheets ([WcApprovalSheet]) — the key never
+ * leaves the device.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ConnectScreen(model: WalletModel) {
-    var uri by remember { mutableStateOf("") }
+private fun AgentsScreen(model: WalletModel) {
+    var showConnect by remember { mutableStateOf(false) }
     var selectedDapp by remember { mutableStateOf<WcSessionInfo?>(null) }
-    val context = LocalContext.current
     LaunchedEffect(Unit) { model.refreshWcSessions() }
     selectedDapp?.let { DappDetailSheet(model, it) { selectedDapp = null } }
+    if (showConnect) {
+        ModalBottomSheet(onDismissRequest = { showConnect = false }) {
+            ConnectSheet(model) { showConnect = false }
+        }
+    }
     Column(
-        Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
+        Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Connect an agent or dApp", style = MaterialTheme.typography.titleMedium)
+        if (model.wcSessions.isEmpty()) {
+            // The empty roster leads with the one action that fills it.
+            Column(
+                Modifier.fillMaxWidth().padding(top = 48.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.SmartToy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(44.dp),
+                )
+                Text("No agents connected", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "An agent or dApp you connect can ask this wallet to sign in and pay. " +
+                        "You set its spending limits; the key never leaves this device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Button(onClick = { showConnect = true }) { Text("Connect an agent or dApp") }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionHeader("Your agents")
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { showConnect = true }) { Text("+ Connect") }
+            }
+            Text(
+                "Tap an agent to set its spending limits and see what it has done.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            model.wcSessions.forEach { session ->
+                val policy = model.dappPolicies[session.topic]
+                ElevatedCard(
+                    Modifier.fillMaxWidth().clickable { selectedDapp = session },
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(session.name, style = MaterialTheme.typography.bodyLarge)
+                        if (session.url.isNotBlank()) {
+                            Text(
+                                session.url,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Text(
+                            policySummary(policy),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (policy == null) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        model.wcStatus?.let { status ->
+            Text(
+                status,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** One line of limits for the roster card. */
+private fun policySummary(policy: io.github.vsima.canton.dapp.wallet.DappSpendPolicy?): String {
+    if (policy == null) return "No limits set · every payment asks you"
+    val parts = mutableListOf<String>()
+    policy.maxPerTransaction?.let { parts += "max ${it.toPlainString()} CC/payment" }
+    policy.dailyCap?.let { parts += "${it.toPlainString()} CC/day" }
+    policy.autoApproveBelow?.let { parts += "auto under ${it.toPlainString()} CC" }
+    return if (parts.isEmpty()) "No limits set · every payment asks you" else parts.joinToString(" · ")
+}
+
+/** The pairing action, hosted in a sheet off the Agents roster. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConnectSheet(model: WalletModel, onDone: () -> Unit) {
+    var uri by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
+            .imePadding(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Connect an agent or dApp", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Scan or paste a WalletConnect link (wc:…) shown by a dApp. You approve " +
+            "Scan or paste a WalletConnect link (wc:…) shown by an agent or dApp. You approve " +
                 "sharing your account and approve each signature — the key never leaves this device.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1451,58 +1557,11 @@ private fun ConnectScreen(model: WalletModel) {
         Button(
             onClick = {
                 model.pairWalletConnect(uri)
-                uri = ""
+                onDone()
             },
             enabled = uri.trim().startsWith("wc:"),
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Connect") }
-        model.wcStatus?.let { status ->
-            Text(
-                status,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        if (model.wcSessions.isNotEmpty()) {
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            SectionHeader("Connected dApps")
-            Text(
-                "Tap a dApp to set its spending limits and see what it has done.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            model.wcSessions.forEach { session ->
-                ElevatedCard(
-                    Modifier.fillMaxWidth().clickable { selectedDapp = session },
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(session.name, style = MaterialTheme.typography.bodyLarge)
-                            if (session.url.isNotBlank()) {
-                                Text(
-                                    session.url,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Text(
-                                "session ${session.topic.take(10)}…",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        TextButton(
-                            onClick = { model.disconnectWcSession(session.topic) },
-                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                        ) { Text("Disconnect") }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1627,6 +1686,15 @@ private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismis
                 // The sheet scrolls as one column; cap the inline list.
                 peerActivity.take(20).forEach { AgentActivityRow(it) }
             }
+
+            TextButton(
+                onClick = {
+                    model.disconnectWcSession(session.topic)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Disconnect this agent") }
         }
     }
 }
