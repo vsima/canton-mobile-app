@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -198,13 +199,13 @@ fun WalletTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
-// Four sections, down from five: Inbox and History fold into Activity, one
-// feed answering "what has been happening in my wallet". That also gives
-// agent events (including the spend policy's sheetless outcomes) a
-// first-class, badge-able surface without adding a nav item.
+// Three sections, down from five: Inbox and History fold into Activity (one
+// feed answering "what has been happening in my wallet", which also gives
+// agent events a first-class, badge-able surface), and Transfer folds into
+// Portfolio as Send/Receive actions on the balance it moves. Connect is the
+// dApp hub: pairing, sessions, per-dApp spending limits.
 private enum class Section(val label: String, val icon: ImageVector) {
     Portfolio("Portfolio", Icons.Outlined.AccountBalanceWallet),
-    Transfer("Transfer", Icons.Outlined.SwapHoriz),
     Activity("Activity", Icons.Outlined.History),
     Connect("Connect", Icons.Outlined.Link),
 }
@@ -287,9 +288,9 @@ private fun CenteredMessage(title: String, body: String, spinner: Boolean, error
 private fun WalletTabs(model: WalletModel) {
     var section by remember { mutableStateOf(Section.Portfolio) }
 
-    // A checkout deep link routes straight to Send, where it's prefilled.
+    // A checkout deep link routes to Portfolio, whose Send sheet prefills it.
     LaunchedEffect(model.pendingCheckoutUrl) {
-        if (model.pendingCheckoutUrl != null) section = Section.Transfer
+        if (model.pendingCheckoutUrl != null) section = Section.Portfolio
     }
 
     // NavigationSuiteScaffold adapts the navigation itself: bottom bar on
@@ -327,7 +328,6 @@ private fun WalletTabs(model: WalletModel) {
             Column(Modifier.padding(padding)) {
                 when (section) {
                     Section.Portfolio -> PortfolioScreen(model)
-                    Section.Transfer -> TransferScreen(model)
                     Section.Activity -> ActivityScreen(model)
                     Section.Connect -> ConnectScreen(model)
                 }
@@ -433,6 +433,17 @@ private fun PortfolioScreen(model: WalletModel) {
             }
         },
     ) {
+    // Send and Receive live with the balance they move; the old Transfer
+    // tab's pager opens as a sheet. A checkout deep link opens it on Send.
+    var transferPage by remember { mutableStateOf<TransferPage?>(null) }
+    LaunchedEffect(model.pendingCheckoutUrl) {
+        if (model.pendingCheckoutUrl != null) transferPage = TransferPage.Send
+    }
+    transferPage?.let { page ->
+        ModalBottomSheet(onDismissRequest = { transferPage = null }) {
+            TransferScreen(model, initialPage = page)
+        }
+    }
     LazyColumn {
         item {
             ElevatedCard(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -443,6 +454,35 @@ private fun PortfolioScreen(model: WalletModel) {
                     )
                     OutlinedButton(onClick = { showSigner = true }) {
                         Text(model.signerLabel, style = MaterialTheme.typography.labelMedium)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Button(
+                            onClick = { transferPage = TransferPage.Send },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.CallMade,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("Send")
+                        }
+                        FilledTonalButton(
+                            onClick = { transferPage = TransferPage.Receive },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.CallReceived,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("Receive")
+                        }
                     }
                 }
             }
@@ -672,12 +712,12 @@ private fun InboxScreen(model: WalletModel) {
     }
 }
 
-/** Send and Receive under one nav item, paged by a segmented control at the top.
- *  A `canton-checkout:` deep link lands on Send. */
+/** Send and Receive, paged by a segmented control at the top; hosted in the
+ *  Portfolio sheet. A `canton-checkout:` deep link lands on Send. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TransferScreen(model: WalletModel) {
-    var page by remember { mutableStateOf(TransferPage.Send) }
+private fun TransferScreen(model: WalletModel, initialPage: TransferPage = TransferPage.Send) {
+    var page by remember { mutableStateOf(initialPage) }
     // A scanned/deep-linked checkout is a payment — show Send.
     LaunchedEffect(model.pendingCheckoutUrl) {
         if (model.pendingCheckoutUrl != null) page = TransferPage.Send
