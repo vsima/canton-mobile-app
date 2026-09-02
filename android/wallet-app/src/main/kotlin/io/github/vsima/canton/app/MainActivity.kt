@@ -208,7 +208,7 @@ fun WalletTheme(content: @Composable () -> Unit) {
 private enum class Section(val label: String, val icon: ImageVector) {
     Portfolio("Portfolio", Icons.Outlined.AccountBalanceWallet),
     Activity("Activity", Icons.Outlined.History),
-    Agents("Agents", Icons.Outlined.SmartToy),
+    Dapps("dApps", Icons.Outlined.Link),
 }
 
 /** Filter chips on the Activity feed. */
@@ -330,7 +330,7 @@ private fun WalletTabs(model: WalletModel) {
                 when (section) {
                     Section.Portfolio -> PortfolioScreen(model)
                     Section.Activity -> ActivityScreen(model)
-                    Section.Agents -> AgentsScreen(model)
+                    Section.Dapps -> AgentsScreen(model)
                 }
             }
         }
@@ -1441,7 +1441,7 @@ private fun AgentsScreen(model: WalletModel) {
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(44.dp),
                 )
-                Text("No agents connected", style = MaterialTheme.typography.titleMedium)
+                Text("Nothing connected yet", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "An agent or dApp you connect can ask this wallet to sign in and pay. " +
                         "You set its spending limits; the key never leaves this device.",
@@ -1456,12 +1456,12 @@ private fun AgentsScreen(model: WalletModel) {
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SectionHeader("Your agents")
+                SectionHeader("Connected dApps")
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = { showConnect = true }) { Text("+ Connect") }
             }
             Text(
-                "Tap an agent to set its spending limits and see what it has done.",
+                "Tap one to set its spending limits and see what it has done.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1694,7 +1694,7 @@ private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismis
                 },
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Disconnect this agent") }
+            ) { Text("Disconnect") }
         }
     }
 }
