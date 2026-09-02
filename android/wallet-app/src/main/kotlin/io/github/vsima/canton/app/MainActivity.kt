@@ -68,6 +68,7 @@ import androidx.compose.material.icons.outlined.QrCode
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.SmartToy
 import android.util.Log
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
@@ -207,7 +208,7 @@ fun WalletTheme(content: @Composable () -> Unit) {
 private enum class Section(val label: String, val icon: ImageVector) {
     Portfolio("Portfolio", Icons.Outlined.AccountBalanceWallet),
     Activity("Activity", Icons.Outlined.History),
-    Connect("Connect", Icons.Outlined.Link),
+    Agents("Agents", Icons.Outlined.SmartToy),
 }
 
 /** Filter chips on the Activity feed. */
@@ -329,7 +330,7 @@ private fun WalletTabs(model: WalletModel) {
                 when (section) {
                     Section.Portfolio -> PortfolioScreen(model)
                     Section.Activity -> ActivityScreen(model)
-                    Section.Connect -> ConnectScreen(model)
+                    Section.Agents -> ConnectScreen(model)
                 }
             }
         }
@@ -1420,7 +1421,7 @@ private fun ConnectScreen(model: WalletModel) {
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Connect a dApp", style = MaterialTheme.typography.titleMedium)
+        Text("Connect an agent or dApp", style = MaterialTheme.typography.titleMedium)
         Text(
             "Scan or paste a WalletConnect link (wc:…) shown by a dApp. You approve " +
                 "sharing your account and approve each signature — the key never leaves this device.",
