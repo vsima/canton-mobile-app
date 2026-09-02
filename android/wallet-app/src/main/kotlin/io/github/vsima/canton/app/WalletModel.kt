@@ -170,6 +170,11 @@ class WalletModel(
     private val store: io.github.vsima.canton.wallet.WalletStore,
     /** Only read to migrate installs that predate [store]; see [migrateLegacyPrefs]. */
     private val legacyPrefs: android.content.SharedPreferences? = null,
+    /** Policies, activity, and spend receipts for the agent surface. */
+    private val agentStore: AgentStore? = null,
+    /** Fires a local notification for sheetless outcomes (auto-approve,
+     *  refusal, rate limit); wired to the platform by MainActivity. */
+    private val onSilentAgentActivity: (io.github.vsima.canton.dapp.wallet.DappActivity) -> Unit = {},
 ) {
     /** Operations outlive the composables that trigger them: a tapped
      *  Accept must not die because its row left the screen. */
@@ -205,6 +210,15 @@ class WalletModel(
     /** Contract ids with an in-flight accept/reject, so only the tapped
      *  row's buttons disable — not the whole inbox. */
     var processing by mutableStateOf(setOf<String>())
+
+    /** The agent activity feed, newest first, loaded from [agentStore]. */
+    var agentActivity by mutableStateOf<List<io.github.vsima.canton.dapp.wallet.DappActivity>>(emptyList())
+        private set
+
+    /** Sheetless events (auto-approved, refused, rate-limited) not yet seen
+     *  on the Activity tab; drives the tab badge. */
+    var unseenAgentEvents by mutableStateOf(0)
+        private set
     /** True when the signing key is hardware-resident (StrongBox or TEE) —
      *  drives the trust copy, which must never overclaim. */
     var hardwareSigner by mutableStateOf(false)
@@ -888,12 +902,71 @@ class WalletModel(
                     ),
                     messageSigner = messageSigner,
                     prepareExecute = prepareExecute,
+                    spendPolicy = { agentStore?.policy(peer.id) },
+                    spendLedger = agentStore?.receiptsLedger
+                        ?: io.github.vsima.canton.dapp.wallet.InMemorySpendLedger(),
+                    activityObserver = { handleAgentActivity(it) },
                 ),
                 DAPP_NETWORK_ID,
             )
         }
+        loadAgentActivity()
         WalletConnectController.refreshSessions()
         Log.i("WALLET", "WalletConnect enabled for ${partyId?.take(24)}…")
+    }
+
+    // ── Agent surface: policies + activity ─────────────────────────────
+
+    private val silentKinds = setOf(
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_AUTO_APPROVED,
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_REFUSED,
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_RATE_LIMITED,
+    )
+
+    /** Called by every session's activity observer, off the main thread.
+     *  Persists first, then updates the feed state and, for the sheetless
+     *  kinds, the badge and the local notification. */
+    private fun handleAgentActivity(activity: io.github.vsima.canton.dapp.wallet.DappActivity) {
+        try {
+            agentStore?.appendActivity(activity)
+        } catch (e: Exception) {
+            Log.i("WALLET", "agent activity persist failed: $e")
+        }
+        val silent = activity.kind in silentKinds
+        scope.launch {
+            agentActivity = listOf(activity) + agentActivity
+            if (silent) unseenAgentEvents += 1
+        }
+        if (silent) onSilentAgentActivity(activity)
+    }
+
+    /** Loads the persisted feed (newest first) once the wallet is up. */
+    private fun loadAgentActivity() {
+        val store = agentStore ?: return
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val loaded = try {
+                store.activity().reversed()
+            } catch (e: Exception) {
+                Log.i("WALLET", "agent activity load failed: $e")
+                emptyList()
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                agentActivity = loaded
+            }
+        }
+    }
+
+    /** The Activity tab was opened; the silent-event badge resets. */
+    fun markAgentActivitySeen() {
+        unseenAgentEvents = 0
+    }
+
+    fun dappPolicy(peerId: String): io.github.vsima.canton.dapp.wallet.DappSpendPolicy? =
+        agentStore?.policy(peerId)
+
+    /** Persists the per-dApp policy; sessions read it fresh on every request. */
+    fun setDappPolicy(peerId: String, policy: io.github.vsima.canton.dapp.wallet.DappSpendPolicy?) {
+        agentStore?.setPolicy(peerId, policy)
     }
 
     /** Hands a scanned/pasted `wc:` pairing URI to the Reown client. */

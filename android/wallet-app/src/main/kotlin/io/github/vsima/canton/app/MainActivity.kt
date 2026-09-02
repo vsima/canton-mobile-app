@@ -130,12 +130,27 @@ class MainActivity : ComponentActivity() {
         WalletModel(
             store = io.github.vsima.canton.wallet.android.AndroidKeystoreWalletStore(this),
             legacyPrefs = getSharedPreferences("wallet", MODE_PRIVATE),
+            agentStore = AgentStore(filesDir),
+            onSilentAgentActivity = { activity ->
+                AgentNotifications.notify(applicationContext, activity)
+            },
         )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AgentNotifications.ensureChannel(this)
+        // Notification permission up front: the spend policy's silent
+        // outcomes (auto-approve, refusal) surface through notifications.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            registerForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+            ) {}.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
         val autoAccept = intent.getBooleanExtra("autoAccept", false)
         // The dev host override is sticky: a deep-link launch (from a camera)
         // carries no extras, so persist the last host and restore it, keeping
@@ -183,12 +198,23 @@ fun WalletTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
+// Four sections, down from five: Inbox and History fold into Activity, one
+// feed answering "what has been happening in my wallet". That also gives
+// agent events (including the spend policy's sheetless outcomes) a
+// first-class, badge-able surface without adding a nav item.
 private enum class Section(val label: String, val icon: ImageVector) {
     Portfolio("Portfolio", Icons.Outlined.AccountBalanceWallet),
-    Inbox("Inbox", Icons.Outlined.Inbox),
     Transfer("Transfer", Icons.Outlined.SwapHoriz),
-    History("History", Icons.Outlined.History),
+    Activity("Activity", Icons.Outlined.History),
     Connect("Connect", Icons.Outlined.Link),
+}
+
+/** Filter chips on the Activity feed. */
+private enum class ActivityFilter(val label: String) {
+    All("All"),
+    Transfers("Transfers"),
+    Requests("Requests"),
+    Dapps("dApps"),
 }
 
 /** The two pages of the Transfer section, paged by a segmented control. */
@@ -276,8 +302,15 @@ private fun WalletTabs(model: WalletModel) {
                     onClick = { section = item },
                     label = { Text(item.label) },
                     icon = {
-                        if (item == Section.Inbox && model.inbox.isNotEmpty()) {
-                            BadgedBox(badge = { Badge { Text("${model.inbox.size}") } }) {
+                        // Pending inbox requests need action; unseen silent
+                        // agent events need attention. Both land on Activity.
+                        val badgeCount = if (item == Section.Activity) {
+                            model.inbox.size + model.unseenAgentEvents
+                        } else {
+                            0
+                        }
+                        if (badgeCount > 0) {
+                            BadgedBox(badge = { Badge { Text("$badgeCount") } }) {
                                 Icon(item.icon, contentDescription = item.label)
                             }
                         } else {
@@ -294,9 +327,8 @@ private fun WalletTabs(model: WalletModel) {
             Column(Modifier.padding(padding)) {
                 when (section) {
                     Section.Portfolio -> PortfolioScreen(model)
-                    Section.Inbox -> InboxScreen(model)
                     Section.Transfer -> TransferScreen(model)
-                    Section.History -> HistoryScreen(model)
+                    Section.Activity -> ActivityScreen(model)
                     Section.Connect -> ConnectScreen(model)
                 }
             }
@@ -976,10 +1008,8 @@ private fun changeTitle(change: TokenStandardClient.HoldingsChange): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HistoryScreen(model: WalletModel) {
-    var selected by remember { mutableStateOf<TokenStandardClient.HoldingsChange?>(null) }
-    selected?.let { change ->
-        ModalBottomSheet(onDismissRequest = { selected = null }) {
+private fun TransferDetailSheet(change: TokenStandardClient.HoldingsChange, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
             Column(
                 Modifier.fillMaxWidth()
                     .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
@@ -1038,33 +1068,17 @@ private fun HistoryScreen(model: WalletModel) {
                     )
                 }
                 Button(
-                    onClick = { selected = null },
+                    onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 ) { Text("Done") }
             }
-        }
     }
-    var refreshing by remember { mutableStateOf(false) }
-    val refreshScope = rememberCoroutineScope()
-    PullToRefreshBox(
-        isRefreshing = refreshing,
-        onRefresh = {
-            refreshScope.launch {
-                refreshing = true
-                model.refresh()
-                refreshing = false
-            }
-        },
-    ) {
-    LazyColumn {
-        // The offer leg of a two-step transfer nets to zero (holdings only
-        // lock); the settlement leg carries the value. Hide the zero-net
-        // noise from the list — the detail sheet still has everything.
-        val visible = model.history.filter { it.summary?.amount?.signum() != 0 }
-        if (visible.isEmpty()) {
-            item { ListItem(headlineContent = { Text("No activity yet.") }) }
-        }
-        items(visible, key = { it.updateId }) { change ->
+}
+
+/** One transfer row; shared by the merged Activity feed and its Transfers
+ *  filter. */
+@Composable
+private fun TransferRow(change: TokenStandardClient.HoldingsChange, onClick: () -> Unit) {
             val summary = change.summary
             val received =
                 if (summary != null) {
@@ -1082,7 +1096,7 @@ private fun HistoryScreen(model: WalletModel) {
                 else -> Icons.AutoMirrored.Outlined.CallMade
             }
             ListItem(
-                modifier = Modifier.clickable { selected = change },
+                modifier = Modifier.clickable(onClick = onClick),
                 leadingContent = {
                     Icon(
                         icon,
@@ -1143,8 +1157,182 @@ private fun HistoryScreen(model: WalletModel) {
                 },
             )
             HorizontalDivider()
-        }
+}
+
+/** One agent-activity row: what a connected dApp did or tried, sheet or no
+ *  sheet. The silent kinds carry their own tints so refusals and
+ *  auto-approvals read at a glance. */
+@Composable
+private fun AgentActivityRow(activity: io.github.vsima.canton.dapp.wallet.DappActivity) {
+    val kind = activity.kind
+    val amount = activity.transfer?.let {
+        "${it.amount} ${if (it.instrumentId == "Amulet") "CC" else it.instrumentId}"
     }
+    val (icon, tint, title) = when (kind) {
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.CONNECTED ->
+            Triple(Icons.Outlined.Link, MaterialTheme.colorScheme.primary, "Connected")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.CONNECTION_DECLINED ->
+            Triple(Icons.Outlined.Link, MaterialTheme.colorScheme.onSurfaceVariant, "Connection declined")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.MESSAGE_SIGNED ->
+            Triple(Icons.Outlined.Key, MaterialTheme.colorScheme.tertiary, "Signed in")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.MESSAGE_DECLINED ->
+            Triple(Icons.Outlined.Key, MaterialTheme.colorScheme.onSurfaceVariant, "Sign-in declined")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_REQUESTED ->
+            Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.onSurfaceVariant, "Payment requested")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_AUTO_APPROVED ->
+            Triple(Icons.Outlined.Payments, Color(0xFF2E7D32), "Auto-approved" + (amount?.let { ": $it" } ?: ""))
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_REFUSED ->
+            Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.error, "Refused by your policy")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_RATE_LIMITED ->
+            Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.error, "Rate-limited")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_DECLINED ->
+            Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.onSurfaceVariant, "Payment declined")
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_EXECUTED ->
+            Triple(Icons.Outlined.Payments, Color(0xFF2E7D32), "Paid" + (amount?.let { " $it" } ?: ""))
+        io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_FAILED ->
+            Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.error, "Payment failed")
+    }
+    ListItem(
+        leadingContent = { Icon(icon, contentDescription = null, tint = tint) },
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Column {
+                Text(
+                    activity.peerName,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                )
+                activity.transfer?.let { t ->
+                    if (kind != io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_EXECUTED &&
+                        kind != io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_AUTO_APPROVED
+                    ) {
+                        Text(
+                            "${t.amount} ${if (t.instrumentId == "Amulet") "CC" else t.instrumentId} " +
+                                "to ${t.receiver.take(24)}…",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        Text(
+                            "to ${t.receiver.take(30)}…",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                activity.detail?.takeIf {
+                    kind != io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_EXECUTED &&
+                        kind != io.github.vsima.canton.dapp.wallet.DappActivity.Kind.CONNECTED
+                }?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    DateUtils.getRelativeTimeSpanString(activity.at.toEpochMilli()).toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        },
+    )
+    HorizontalDivider()
+}
+
+/**
+ * The Activity tab: one feed for everything that happened in the wallet.
+ * Requests (the old Inbox) stay actionable, transfers (the old History)
+ * keep their detail sheets, and agent events, including the spend policy's
+ * sheetless outcomes, appear inline. Opening the tab clears the badge.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActivityScreen(model: WalletModel) {
+    var filter by remember { mutableStateOf(ActivityFilter.All) }
+    var selected by remember { mutableStateOf<TokenStandardClient.HoldingsChange?>(null) }
+    LaunchedEffect(Unit) { model.markAgentActivitySeen() }
+    selected?.let { TransferDetailSheet(it) { selected = null } }
+
+    Column(Modifier.fillMaxSize()) {
+        SingleChoiceSegmentedButtonRow(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            ActivityFilter.entries.forEachIndexed { index, item ->
+                SegmentedButton(
+                    selected = filter == item,
+                    onClick = { filter = item },
+                    shape = SegmentedButtonDefaults.itemShape(index, ActivityFilter.entries.size),
+                ) { Text(item.label) }
+            }
+        }
+        when (filter) {
+            ActivityFilter.Requests -> InboxScreen(model)
+            else -> {
+                var refreshing by remember { mutableStateOf(false) }
+                val refreshScope = rememberCoroutineScope()
+                PullToRefreshBox(
+                    isRefreshing = refreshing,
+                    onRefresh = {
+                        refreshScope.launch {
+                            refreshing = true
+                            model.refresh()
+                            refreshing = false
+                        }
+                    },
+                ) {
+                    val showTransfers = filter != ActivityFilter.Dapps
+                    val showAgents = filter != ActivityFilter.Transfers
+                    val transfers =
+                        if (showTransfers) {
+                            model.history.filter { it.summary?.amount?.signum() != 0 }
+                        } else {
+                            emptyList()
+                        }
+                    val agents = if (showAgents) model.agentActivity else emptyList()
+                    // One reverse-chronological feed across both sources.
+                    val feed: List<Any> = (
+                        transfers.map { it.recordTime.toEpochMilli() to it as Any } +
+                            agents.map { it.at.toEpochMilli() to it as Any }
+                        ).sortedByDescending { it.first }.map { it.second }
+                    LazyColumn {
+                        if (filter == ActivityFilter.All && model.inbox.isNotEmpty()) {
+                            item {
+                                ListItem(
+                                    modifier = Modifier.clickable { filter = ActivityFilter.Requests },
+                                    leadingContent = {
+                                        Icon(
+                                            Icons.Outlined.Inbox,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    },
+                                    headlineContent = {
+                                        Text(
+                                            "${model.inbox.size} pending request" +
+                                                if (model.inbox.size == 1) "" else "s",
+                                        )
+                                    },
+                                    supportingContent = { Text("Tap to review and accept or reject") },
+                                )
+                                HorizontalDivider()
+                            }
+                        }
+                        if (feed.isEmpty()) {
+                            item { ListItem(headlineContent = { Text("No activity yet.") }) }
+                        }
+                        items(feed.size) { index ->
+                            when (val entry = feed[index]) {
+                                is TokenStandardClient.HoldingsChange ->
+                                    TransferRow(entry) { selected = entry }
+                                is io.github.vsima.canton.dapp.wallet.DappActivity ->
+                                    AgentActivityRow(entry)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1184,8 +1372,10 @@ private fun java.math.BigDecimal.cc(): String = ccFormat.format(this)
 @Composable
 private fun ConnectScreen(model: WalletModel) {
     var uri by remember { mutableStateOf("") }
+    var selectedDapp by remember { mutableStateOf<WcSessionInfo?>(null) }
     val context = LocalContext.current
     LaunchedEffect(Unit) { model.refreshWcSessions() }
+    selectedDapp?.let { DappDetailSheet(model, it) { selectedDapp = null } }
     Column(
         Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1235,8 +1425,15 @@ private fun ConnectScreen(model: WalletModel) {
         if (model.wcSessions.isNotEmpty()) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             SectionHeader("Connected dApps")
+            Text(
+                "Tap a dApp to set its spending limits and see what it has done.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             model.wcSessions.forEach { session ->
-                ElevatedCard(Modifier.fillMaxWidth()) {
+                ElevatedCard(
+                    Modifier.fillMaxWidth().clickable { selectedDapp = session },
+                ) {
                     Row(
                         Modifier.fillMaxWidth().padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1263,6 +1460,131 @@ private fun ConnectScreen(model: WalletModel) {
                         ) { Text("Disconnect") }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Per-dApp detail: the spend-policy editor and that peer's slice of the
+ * activity feed. Policies take effect immediately; sessions read them fresh
+ * on every request. Auto-approval is a per-dApp opt-in with the caps as its
+ * hard bound, and the warning copy says exactly what it removes: the sheet.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismiss: () -> Unit) {
+    val existing = remember(session.topic) { model.dappPolicy(session.topic) }
+    var maxPerTx by remember { mutableStateOf(existing?.maxPerTransaction?.toPlainString() ?: "") }
+    var dailyCap by remember { mutableStateOf(existing?.dailyCap?.toPlainString() ?: "") }
+    var autoApprove by remember { mutableStateOf(existing?.autoApproveBelow != null) }
+    var autoBelow by remember { mutableStateOf(existing?.autoApproveBelow?.toPlainString() ?: "") }
+    var saved by remember { mutableStateOf(false) }
+
+    fun parsed(text: String): java.math.BigDecimal? =
+        text.trim().takeIf { it.isNotEmpty() }?.let {
+            try {
+                java.math.BigDecimal(it).takeIf { v -> v.signum() > 0 }
+            } catch (_: NumberFormatException) {
+                null
+            }
+        }
+    val maxValid = maxPerTx.isBlank() || parsed(maxPerTx) != null
+    val capValid = dailyCap.isBlank() || parsed(dailyCap) != null
+    val autoValid = !autoApprove || parsed(autoBelow) != null
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth()
+                .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(session.name, style = MaterialTheme.typography.titleLarge)
+            if (session.url.isNotBlank()) {
+                Text(
+                    session.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionHeader("Spending limits")
+            Text(
+                "Hard limits this wallet enforces before anything reaches you. A request " +
+                    "outside them is refused without asking; it still shows in Activity.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = maxPerTx,
+                onValueChange = { maxPerTx = it; saved = false },
+                label = { Text("Max per payment (CC)") },
+                isError = !maxValid,
+                supportingText = { Text("Empty = no cap") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = dailyCap,
+                onValueChange = { dailyCap = it; saved = false },
+                label = { Text("Daily cap, rolling 24h (CC)") },
+                isError = !capValid,
+                supportingText = { Text("Empty = no cap") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Auto-approve small payments")
+                    Text(
+                        "Payments at or under the amount below execute with no " +
+                            "approval sheet. You get a notification and an Activity entry instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = autoApprove,
+                    onCheckedChange = { autoApprove = it; saved = false },
+                )
+            }
+            if (autoApprove) {
+                OutlinedTextField(
+                    value = autoBelow,
+                    onValueChange = { autoBelow = it; saved = false },
+                    label = { Text("Auto-approve at or under (CC)") },
+                    isError = !autoValid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Button(
+                onClick = {
+                    val policy = io.github.vsima.canton.dapp.wallet.DappSpendPolicy(
+                        maxPerTransaction = parsed(maxPerTx),
+                        dailyCap = parsed(dailyCap),
+                        autoApproveBelow = if (autoApprove) parsed(autoBelow) else null,
+                    )
+                    val empty = policy.maxPerTransaction == null &&
+                        policy.dailyCap == null && policy.autoApproveBelow == null
+                    model.setDappPolicy(session.topic, if (empty) null else policy)
+                    saved = true
+                },
+                enabled = maxValid && capValid && autoValid,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (saved) "Saved" else "Save limits") }
+
+            val peerActivity = model.agentActivity.filter { it.peerId == session.topic }
+            if (peerActivity.isNotEmpty()) {
+                SectionHeader("Activity")
+                // The sheet scrolls as one column; cap the inline list.
+                peerActivity.take(20).forEach { AgentActivityRow(it) }
             }
         }
     }
