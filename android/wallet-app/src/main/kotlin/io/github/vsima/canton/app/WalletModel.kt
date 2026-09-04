@@ -993,6 +993,9 @@ class WalletModel(
     /** Disconnect a WalletConnect session by topic. */
     fun disconnectWcSession(topic: String) = WalletConnectController.disconnect(topic)
 
+    /** Disconnects every session for a dApp identity, clearing ghosts. */
+    fun disconnectDapp(stableId: String) = WalletConnectController.disconnectDapp(stableId)
+
     private fun ByteArray.toHex(): String =
         joinToString("") { byte -> "%02x".format(byte.toInt() and 0xFF) }
 

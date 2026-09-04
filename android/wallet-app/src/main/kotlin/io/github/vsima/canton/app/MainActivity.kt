@@ -1466,7 +1466,7 @@ private fun AgentsScreen(model: WalletModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             model.wcSessions.forEach { session ->
-                val policy = model.dappPolicies[session.topic]
+                val policy = model.dappPolicies[session.stableId]
                 ElevatedCard(
                     Modifier.fillMaxWidth().clickable { selectedDapp = session },
                 ) {
@@ -1574,7 +1574,7 @@ private fun ConnectSheet(model: WalletModel, onDone: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismiss: () -> Unit) {
-    val existing = remember(session.topic) { model.dappPolicy(session.topic) }
+    val existing = remember(session.stableId) { model.dappPolicy(session.stableId) }
     var maxPerTx by remember { mutableStateOf(existing?.maxPerTransaction?.toPlainString() ?: "") }
     var dailyCap by remember { mutableStateOf(existing?.dailyCap?.toPlainString() ?: "") }
     var autoApprove by remember { mutableStateOf(existing?.autoApproveBelow != null) }
@@ -1673,14 +1673,14 @@ private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismis
                     )
                     val empty = policy.maxPerTransaction == null &&
                         policy.dailyCap == null && policy.autoApproveBelow == null
-                    model.setDappPolicy(session.topic, if (empty) null else policy)
+                    model.setDappPolicy(session.stableId, if (empty) null else policy)
                     saved = true
                 },
                 enabled = maxValid && capValid && autoValid,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (saved) "Saved" else "Save limits") }
 
-            val peerActivity = model.agentActivity.filter { it.peerId == session.topic }
+            val peerActivity = model.agentActivity.filter { it.peerId == session.stableId }
             if (peerActivity.isNotEmpty()) {
                 SectionHeader("Activity")
                 // The sheet scrolls as one column; cap the inline list.
@@ -1689,7 +1689,7 @@ private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismis
 
             TextButton(
                 onClick = {
-                    model.disconnectWcSession(session.topic)
+                    model.disconnectDapp(session.stableId)
                     onDismiss()
                 },
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
