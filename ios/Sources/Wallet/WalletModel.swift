@@ -73,6 +73,17 @@ final class WalletModel {
     private(set) var wcSessions: [WcSessionInfo] = []
     private var cantonWc = false
 
+    // ── Agent surface: policies + activity ─────────────────────────────
+    /// Policies, activity, and spend receipts for the agent surface.
+    private let agentStore = AgentStore()
+    /// The agent activity feed, newest first, loaded from `agentStore`.
+    private(set) var agentActivity: [DappActivity] = []
+    /// Sheetless events (auto-approved, refused, rate-limited) not yet seen
+    /// on the Activity tab; drives the tab badge.
+    private(set) var unseenAgentEvents = 0
+    /// Per-peer spend policies, mirrored from `agentStore` for the roster.
+    private(set) var dappPolicies: [String: DappSpendPolicy] = [:]
+
     /// A checkout URL delivered by a `canton-checkout:` deep link (`.onOpenURL`),
     /// awaiting the Send view to parse and prefill it.
     private(set) var pendingCheckoutUrl: String?
@@ -664,12 +675,61 @@ final class WalletModel {
                     synchronizerId: synchronizerId
                 ),
                 messageSigner: HexMessageSigner(driver: self.driver ?? driver),
-                prepareExecute: pipeline
+                prepareExecute: pipeline,
+                spendPolicy: { [agentStore] in agentStore.policy(peer.id) },
+                spendLedger: agentStore.receiptsLedger,
+                activityObserver: { [weak self] activity in
+                    Task { @MainActor in self?.handleAgentActivity(activity) }
+                }
             )
             return try? CantonWalletConnect(handler: session, networkId: Self.dappNetworkId)
         }
+        loadAgentActivity()
         print("WALLET: WalletConnect enabled for \(partyId?.prefix(24) ?? "")…")
     }
+
+    private static let silentKinds: Set<DappActivity.Kind> = [
+        .transactionAutoApproved, .transactionRefused, .transactionRateLimited,
+    ]
+
+    /// Called for every session activity event. Persists first, then
+    /// updates the feed state and, for the sheetless kinds, the badge and
+    /// the local notification.
+    private func handleAgentActivity(_ activity: DappActivity) {
+        agentStore.appendActivity(activity)
+        agentActivity.insert(activity, at: 0)
+        if Self.silentKinds.contains(activity.kind) {
+            unseenAgentEvents += 1
+            AgentNotifications.notify(activity)
+        }
+    }
+
+    /// Loads the persisted feed (newest first) and policies once the wallet is up.
+    private func loadAgentActivity() {
+        let store = agentStore
+        Task.detached(priority: .utility) { [weak self] in
+            let loaded = Array(store.activity().reversed())
+            let policies = store.policies()
+            await MainActor.run {
+                self?.agentActivity = loaded
+                self?.dappPolicies = policies
+            }
+        }
+    }
+
+    /// The Activity tab was opened; the silent-event badge resets.
+    func markAgentActivitySeen() { unseenAgentEvents = 0 }
+
+    func dappPolicy(_ peerId: String) -> DappSpendPolicy? { agentStore.policy(peerId) }
+
+    /// Persists the per-dApp policy; sessions read it fresh on every request.
+    func setDappPolicy(_ peerId: String, _ policy: DappSpendPolicy?) {
+        agentStore.setPolicy(peerId, policy)
+        if let policy { dappPolicies[peerId] = policy } else { dappPolicies.removeValue(forKey: peerId) }
+    }
+
+    /// Disconnects every session for a dApp identity, clearing ghosts.
+    func disconnectDapp(stableId: String) { WalletConnectController.shared.disconnectDapp(stableId: stableId) }
 
     /// Hands a scanned/pasted `wc:` pairing URI to the Reown client.
     func pairWalletConnect(_ uri: String) {

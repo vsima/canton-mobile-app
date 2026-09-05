@@ -89,21 +89,22 @@ struct ConnectionFailedView: View {
     }
 }
 
+// Three sections, down from five: Inbox and History fold into Activity (one
+// feed answering "what has been happening in my wallet", which also gives
+// agent events a first-class, badge-able surface), and Transfer folds into
+// Portfolio as Send/Receive actions on the balance it moves. dApps is the
+// roster: pairing, sessions, per-dApp spending limits. Mirrors Android.
 enum WalletSection: String, CaseIterable, Identifiable {
     case portfolio = "Portfolio"
-    case inbox = "Inbox"
-    case transfer = "Transfer"
-    case history = "History"
-    case connect = "Connect"
+    case activity = "Activity"
+    case dapps = "dApps"
 
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .portfolio: "creditcard"
-        case .inbox: "tray"
-        case .transfer: "arrow.left.arrow.right"
-        case .history: "clock"
-        case .connect: "link"
+        case .activity: "clock"
+        case .dapps: "link"
         }
     }
 }
@@ -113,7 +114,15 @@ enum WalletSection: String, CaseIterable, Identifiable {
 struct WalletTabsView: View {
     @Environment(WalletModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var section: WalletSection = .portfolio
+    // WALLET_INITIAL_TAB=activity|dapps (via `simctl launch` SIMCTL_CHILD_*)
+    // lands the headless screenshot loop on a tab; unset means Portfolio.
+    @State private var section: WalletSection = {
+        switch ProcessInfo.processInfo.environment["WALLET_INITIAL_TAB"] {
+        case "activity": .activity
+        case "dapps": .dapps
+        default: .portfolio
+        }
+    }()
 
     var body: some View {
         Group {
@@ -124,7 +133,7 @@ struct WalletTabsView: View {
                         selection: Binding(get: { Optional(section) }, set: { section = $0 ?? .portfolio })
                     ) { item in
                         Label(item.rawValue, systemImage: item.icon)
-                            .badge(item == .inbox ? model.inbox.count : 0)
+                            .badge(item == .activity ? model.inbox.count + model.unseenAgentEvents : 0)
                             .tag(item)
                     }
                     .navigationTitle(model.environment.name)
@@ -138,26 +147,22 @@ struct WalletTabsView: View {
                     PortfolioView()
                         .tabItem { Label("Portfolio", systemImage: "creditcard") }
                         .tag(WalletSection.portfolio)
-                    InboxView()
-                        .tabItem { Label("Inbox", systemImage: "tray") }
-                        .badge(model.inbox.count)
-                        .tag(WalletSection.inbox)
-                    TransferView()
-                        .tabItem { Label("Transfer", systemImage: "arrow.left.arrow.right") }
-                        .tag(WalletSection.transfer)
-                    HistoryView()
-                        .tabItem { Label("History", systemImage: "clock") }
-                        .tag(WalletSection.history)
-                    ConnectView()
-                        .tabItem { Label("Connect", systemImage: "link") }
-                        .tag(WalletSection.connect)
+                    ActivityView()
+                        .tabItem { Label("Activity", systemImage: "clock") }
+                        // Pending requests need action; unseen silent agent
+                        // events need attention. Both land on Activity.
+                        .badge(model.inbox.count + model.unseenAgentEvents)
+                        .tag(WalletSection.activity)
+                    DappsView()
+                        .tabItem { Label("dApps", systemImage: "link") }
+                        .tag(WalletSection.dapps)
                 }
             }
         }
         .task { await autoRefresh() }
-        // A checkout deep link routes straight to Transfer (its Send page prefills).
+        // A checkout deep link routes to Portfolio, whose Send sheet prefills it.
         .onChange(of: model.pendingCheckoutUrl) { _, url in
-            if url != nil { section = .transfer }
+            if url != nil { section = .portfolio }
         }
         // The WalletConnect approval sheet, mounted once above the shell so it
         // rises over any tab. Dismissing it (swipe) rejects the request.
@@ -175,16 +180,18 @@ struct WalletTabsView: View {
     private func view(for section: WalletSection) -> some View {
         switch section {
         case .portfolio: PortfolioView()
-        case .inbox: InboxView()
-        case .transfer: TransferView()
-        case .history: HistoryView()
-        case .connect: ConnectView()
+        case .activity: ActivityView()
+        case .dapps: DappsView()
         }
     }
 
     /// Polls while the app is foregrounded; the demo loop's inbox-and-accept
     /// runs headlessly when WALLET_AUTO_ACCEPT=1 (verification only).
     private func autoRefresh() async {
+        // Notification permission up front: the spend policy's silent
+        // outcomes (auto-approve, refusal) surface through notifications.
+        // Not awaited: the balance must not wait on the permission prompt.
+        Task { await AgentNotifications.requestAuthorization() }
         let autoAccept = ProcessInfo.processInfo.environment["WALLET_AUTO_ACCEPT"] == "1"
         while !Task.isCancelled {
             await model.refresh()
@@ -202,6 +209,9 @@ struct PortfolioView: View {
     // Progressive disclosure of the UTXO model: the rolled-up balance row
     // opens a sheet listing the discrete holding contracts backing it.
     @State private var selectedGroup: HoldingGroup?
+    // Send and Receive live with the balance they move; the old Transfer
+    // tab's pager opens as a sheet. A checkout deep link opens it on Send.
+    @State private var transferPage: TransferView.Page?
 
     var body: some View {
         NavigationStack {
@@ -218,6 +228,23 @@ struct PortfolioView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        HStack(spacing: 10) {
+                            Button {
+                                transferPage = .send
+                            } label: {
+                                Label("Send", systemImage: "arrow.up.right")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button {
+                                transferPage = .receive
+                            } label: {
+                                Label("Receive", systemImage: "arrow.down.left")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.top, 6)
                     }
                     .padding(.vertical, 8)
                 }
@@ -280,6 +307,12 @@ struct PortfolioView: View {
             }
             .sheet(item: $selectedGroup) { group in
                 HoldingGroupDetailView(group: group)
+            }
+            .sheet(item: $transferPage) { page in
+                TransferView(initialPage: page)
+            }
+            .onChange(of: model.pendingCheckoutUrl) { _, url in
+                if url != nil { transferPage = .send }
             }
         }
     }
@@ -420,55 +453,6 @@ private struct HoldingContractRow: View {
     }
 }
 
-struct InboxView: View {
-    @Environment(WalletModel.self) private var model
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if model.inbox.isEmpty {
-                    Text("No pending offers.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(model.inbox, id: \.contractId) { offer in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("\((Decimal(string: offer.transfer.amount) ?? 0) as NSDecimalNumber, formatter: PortfolioView.amountFormat) \(offer.transfer.instrumentId.id)")
-                            .font(.headline.monospacedDigit())
-                        Text("from \(offer.transfer.sender.prefix(30))…")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                        if let memo = offer.transfer.meta[WalletModel.memoKey], !memo.isEmpty {
-                            Label(memo, systemImage: "text.quote")
-                                .font(.caption)
-                        }
-                        Label {
-                            Text("Expires \(offer.transfer.executeBefore, style: .relative)")
-                        } icon: {
-                            Image(systemName: "hourglass")
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        HStack {
-                            Button("Accept") {
-                                Task { await model.accept(offer) }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            Button("Reject", role: .destructive) {
-                                Task { await model.reject(offer) }
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .disabled(model.processing.contains(offer.contractId))
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-            .navigationTitle("Inbox")
-            .refreshable { await model.refresh() }
-        }
-    }
-}
-
 /// The Transfer tab: one screen with a segmented control paging between Send and
 /// Receive — the iOS twin of Android's combined Transfer nav item. Owns the
 /// single NavigationStack; SendView/ReceiveView render as its content.
@@ -480,7 +464,12 @@ struct TransferView: View {
     }
 
     @Environment(WalletModel.self) private var model
-    @State private var page: Page = .send
+    @Environment(\.dismiss) private var dismiss
+    @State private var page: Page
+
+    init(initialPage: Page = .send) {
+        _page = State(initialValue: initialPage)
+    }
 
     var body: some View {
         NavigationStack {
@@ -497,6 +486,11 @@ struct TransferView: View {
             }
             .navigationTitle("Transfer")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
         // A checkout deep link prefills on the Send page — switch to it.
         .onChange(of: model.pendingCheckoutUrl) { _, url in
