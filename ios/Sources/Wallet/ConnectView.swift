@@ -274,7 +274,7 @@ struct WcApprovalSheet: View {
 
     /// Accent for the sheet that moves funds; the brand orange, deliberately
     /// not a semantic color so it reads the same in light and dark.
-    private static let transactionAccent = Color(red: 0.91, green: 0.31, blue: 0.18)
+    static let transactionAccent = Color(red: 0.91, green: 0.31, blue: 0.18)
 
     var body: some View {
         NavigationStack {

@@ -136,59 +136,100 @@ extension ActivityView {
     @ViewBuilder
     fileprivate var pendingApprovalRows: some View {
         ForEach(model.pendingApprovals) { approval in
-            Button {
-                model.reopenApproval(approval.id)
-            } label: {
-                PendingApprovalRow(approval: approval)
-            }
-            .buttonStyle(.plain)
+            PendingApprovalRow(approval: approval) { model.reopenApproval(approval.id) }
         }
     }
 }
 
 /// A WalletConnect request still waiting for an answer: its sheet was swiped
-/// away (or another sheet was up when it arrived). Tapping brings the sheet
-/// back; the countdown is the request's remaining life.
+/// away (or another sheet was up when it arrived). Decline and Approve
+/// answer it right here, like a transfer offer; tapping the row brings the
+/// full sheet back. The countdown is the request's remaining life, and the
+/// approve button carries the same tint as the sheet it stands in for.
 struct PendingApprovalRow: View {
     let approval: WalletModel.WcApproval
+    let open: () -> Void
 
-    private var style: (icon: String, tint: Color, title: String) {
+    private var transfer: DappTransferSummary? {
+        if case .transaction(_, _, _, let submission) = approval.request {
+            return DappCommandSummary.transferOf(submission)
+        }
+        return nil
+    }
+
+    private var style: (icon: String, tint: Color, title: String, approve: String) {
         switch approval.request {
-        case .connection: return ("link", Color.accentColor, "Connection request")
-        case .message: return ("key", Color.purple, "Sign-in request")
-        case .transaction(_, _, _, let submission):
-            let amount = DappCommandSummary.transferOf(submission).map {
-                "\($0.amount) \($0.instrumentId == "Amulet" ? "CC" : $0.instrumentId)"
-            }
-            return ("arrow.up.right.circle", Color.orange, "Payment request" + (amount.map { ": \($0)" } ?? ""))
+        case .connection: return ("link", Color.accentColor, "Connection request", "Connect")
+        case .message: return ("key", Color.purple, "Sign-in request", "Sign in")
+        case .transaction:
+            let amount = transfer.map { "\($0.amount) \($0.instrumentId == "Amulet" ? "CC" : $0.instrumentId)" }
+            return (
+                "arrow.up.right.circle",
+                WcApprovalSheet.transactionAccent,
+                "Payment request" + (amount.map { ": \($0)" } ?? ""),
+                "Approve"
+            )
         }
     }
 
+    /// The same answer the sheet's approve button gives.
+    private var approveAnswer: DappApproval {
+        if case .connection(_, _, let available) = approval.request { return .approved(accounts: available) }
+        return .approved()
+    }
+
     var body: some View {
-        HStack(alignment: .top) {
-            Image(systemName: style.icon)
-                .foregroundStyle(style.tint)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(style.title)
-                Text(approval.request.peer.name)
-                    .font(.caption.weight(.medium))
-                Text("Waiting for you · tap to review")
-                    .font(.caption)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                Image(systemName: style.icon)
+                    .foregroundStyle(style.tint)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(style.title)
+                        .font(.headline)
+                    Text(approval.request.peer.name)
+                        .font(.caption.weight(.medium))
+                    if let transfer {
+                        Text("to \(transfer.receiver.prefix(30))…")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        if let memo = transfer.memo, !memo.isEmpty {
+                            Text("“\(memo)”")
+                                .font(.caption)
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        Image(systemName: "hourglass")
+                        Text("Waiting for your answer · expires in")
+                        Text(approval.expiresAt, style: .timer).monospacedDigit()
+                    }
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 4) {
-                    Image(systemName: "hourglass")
-                    Text("Expires in")
-                    Text(approval.expiresAt, style: .timer).monospacedDigit()
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                Spacer()
             }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            HStack {
+                Button("Decline", role: .cancel) {
+                    approval.resolve(.rejected(reason: "Declined"))
+                }
+                .buttonStyle(.bordered)
+                Button(style.approve) {
+                    approval.resolve(approveAnswer)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(style.tint)
+                Spacer()
+                Button(action: open) {
+                    Label("Details", systemImage: "chevron.right")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
         }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: open)
     }
 }
 
@@ -205,8 +246,12 @@ struct AgentActivityRow: View {
     private var style: (icon: String, tint: Color, title: String) {
         switch activity.kind {
         case .connected: ("link", Color.accentColor, "Connected")
+        case .connectionDeclined where activity.detail == WalletModel.expiredReason:
+            ("link", Color.secondary, "Connection request expired")
         case .connectionDeclined: ("link", Color.secondary, "Connection declined")
         case .messageSigned: ("key", Color.purple, "Signed in")
+        case .messageDeclined where activity.detail == WalletModel.expiredReason:
+            ("key", Color.secondary, "Sign-in request expired")
         case .messageDeclined: ("key", Color.secondary, "Sign-in declined")
         case .transactionRequested: ("arrow.up.right.circle", Color.secondary, "Payment requested")
         case .transactionAutoApproved:

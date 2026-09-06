@@ -110,7 +110,6 @@ import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material.icons.outlined.HourglassEmpty
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -1207,37 +1206,57 @@ private fun TransferRow(change: TokenStandardClient.HoldingsChange, onClick: () 
 }
 
 /** A WalletConnect request still waiting for an answer: its sheet was swiped
- *  away (or another sheet was up when it arrived). Tapping brings the sheet
- *  back; the countdown is the request's remaining life. */
+ *  away (or another sheet was up when it arrived). Decline and the approve
+ *  button answer it right here, like a transfer offer; tapping the row
+ *  brings the full sheet back. The countdown is the request's remaining
+ *  life, and the approve button carries the same tint as the sheet it
+ *  stands in for. */
 @Composable
 private fun PendingApprovalRow(approval: WalletModel.WcApproval, onOpen: () -> Unit) {
-    val (icon, tint, title) = when (val request = approval.request) {
+    val request = approval.request
+    val transfer = (request as? DappApprovalRequest.Transaction)
+        ?.let { io.github.vsima.canton.dapp.wallet.DappCommandSummary.transferOf(it.submission) }
+    val (icon, tint, title) = when (request) {
         is DappApprovalRequest.Connection ->
             Triple(Icons.Outlined.Link, MaterialTheme.colorScheme.primary, "Connection request")
         is DappApprovalRequest.Message ->
             Triple(Icons.Outlined.Key, MaterialTheme.colorScheme.tertiary, "Sign-in request")
         is DappApprovalRequest.Transaction -> {
-            val amount = io.github.vsima.canton.dapp.wallet.DappCommandSummary.transferOf(request.submission)
-                ?.let { "${it.amount} ${if (it.instrumentId == "Amulet") "CC" else it.instrumentId}" }
+            val amount = transfer?.let { "${it.amount} ${if (it.instrumentId == "Amulet") "CC" else it.instrumentId}" }
             Triple(Icons.Outlined.Payments, TransactionAccent, "Payment request" + (amount?.let { ": $it" } ?: ""))
         }
+    }
+    val approveLabel = when (request) {
+        is DappApprovalRequest.Connection -> "Connect"
+        is DappApprovalRequest.Message -> "Sign in"
+        is DappApprovalRequest.Transaction -> "Approve"
+    }
+    // The same answer the sheet's approve button gives.
+    val approveAnswer = when (request) {
+        is DappApprovalRequest.Connection -> DappApproval.Approved(request.available)
+        else -> DappApproval.Approved()
     }
     ListItem(
         modifier = Modifier.clickable(onClick = onOpen),
         leadingContent = { Icon(icon, contentDescription = null, tint = tint) },
-        headlineContent = { Text(title) },
+        headlineContent = { Text(title, fontWeight = FontWeight.Medium) },
         supportingContent = {
             Column {
                 Text(
-                    approval.request.peer.name,
+                    request.peer.name,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                 )
-                Text(
-                    "Waiting for you · tap to review",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                transfer?.let { t ->
+                    Text(
+                        "to ${t.receiver.take(30)}…",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    t.memo?.takeIf { it.isNotBlank() }?.let {
+                        Text("“$it”", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Icon(
                         Icons.Outlined.HourglassEmpty,
@@ -1247,15 +1266,28 @@ private fun PendingApprovalRow(approval: WalletModel.WcApproval, onOpen: () -> U
                     )
                     Spacer(Modifier.size(4.dp))
                     Text(
-                        "Expires in ${countdownTo(approval.expiresAt)}",
+                        "Waiting for your answer · expires in ${countdownTo(approval.expiresAt)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = { approval.resolve(DappApproval.Rejected("Declined")) },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    ) { Text("Decline") }
+                    Button(
+                        onClick = { approval.resolve(approveAnswer) },
+                        colors = ButtonDefaults.buttonColors(containerColor = tint),
+                    ) { Text(approveLabel) }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onOpen) { Text("Details") }
+                }
             }
-        },
-        trailingContent = {
-            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null)
         },
     )
     HorizontalDivider()
@@ -1287,11 +1319,19 @@ private fun AgentActivityRow(activity: io.github.vsima.canton.dapp.wallet.DappAc
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.CONNECTED ->
             Triple(Icons.Outlined.Link, MaterialTheme.colorScheme.primary, "Connected")
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.CONNECTION_DECLINED ->
-            Triple(Icons.Outlined.Link, MaterialTheme.colorScheme.onSurfaceVariant, "Connection declined")
+            Triple(
+                Icons.Outlined.Link,
+                MaterialTheme.colorScheme.onSurfaceVariant,
+                if (activity.detail == WalletModel.EXPIRED_REASON) "Connection request expired" else "Connection declined",
+            )
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.MESSAGE_SIGNED ->
             Triple(Icons.Outlined.Key, MaterialTheme.colorScheme.tertiary, "Signed in")
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.MESSAGE_DECLINED ->
-            Triple(Icons.Outlined.Key, MaterialTheme.colorScheme.onSurfaceVariant, "Sign-in declined")
+            Triple(
+                Icons.Outlined.Key,
+                MaterialTheme.colorScheme.onSurfaceVariant,
+                if (activity.detail == WalletModel.EXPIRED_REASON) "Sign-in request expired" else "Sign-in declined",
+            )
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_REQUESTED ->
             Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.onSurfaceVariant, "Payment requested")
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_AUTO_APPROVED ->
