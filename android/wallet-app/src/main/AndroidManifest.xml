@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Local notifications for sheetless agent outcomes (spend-policy
+         auto-approvals and refusals); requested at first launch. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Dev builds talk plaintext to LocalNet via the emulator host bridge. -->
     <!-- The wallet store is encrypted under a device-bound Keystore key, so a

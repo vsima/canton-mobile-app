@@ -36,7 +36,23 @@ import kotlinx.serialization.json.Json
  * sheet.
  */
 /** A live WalletConnect session, for display on the Connect screen. */
-data class WcSessionInfo(val topic: String, val name: String, val url: String)
+data class WcSessionInfo(val topic: String, val name: String, val url: String) {
+    /**
+     * A stable identity for the connected peer, used to key its spend policy
+     * and activity so both survive reconnection and are shared across any
+     * duplicate sessions to the same dApp. The session topic is per-pairing
+     * and would lose the policy on every reconnect; the URL (else the name)
+     * identifies the dApp itself. Self-reported, so the approval sheets still
+     * show the unverified warning.
+     */
+    val stableId: String get() = dappStableId(url, name, topic)
+}
+
+/** See [WcSessionInfo.stableId]. Shared so the peer id and the roster agree. */
+fun dappStableId(url: String?, name: String?, topic: String): String =
+    url?.takeIf { it.isNotBlank() }
+        ?: name?.takeIf { it.isNotBlank() }
+        ?: topic
 
 object WalletConnectController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -90,12 +106,16 @@ object WalletConnectController {
                     null
                 }
                 val name = meta?.name?.takeIf { it.isNotBlank() } ?: "Unidentified dApp"
+                val url = meta?.url?.takeIf { it.isNotBlank() }
                 peerNames[topic] = name
                 factory(
                     DappPeer(
-                        id = topic,
+                        // Stable across reconnections so policy and activity
+                        // follow the dApp, not the ephemeral session; see
+                        // WcSessionInfo.stableId.
+                        id = dappStableId(url, name, topic),
                         name = name,
-                        url = meta?.url?.takeIf { it.isNotBlank() },
+                        url = url,
                         iconUrl = meta?.icons?.firstOrNull { it.isNotBlank() },
                         verified = verify?.validation == Wallet.Model.Validation.VALID,
                     ),
@@ -107,14 +127,34 @@ object WalletConnectController {
     /** Reads WalletKit's active sessions and pushes them to the UI. */
     fun refreshSessions() {
         val sessions = try {
-            WalletKit.getListOfActiveSessions().map { s ->
-                WcSessionInfo(topic = s.topic, name = s.metaData?.name ?: "dApp", url = s.metaData?.url ?: "")
-            }
+            WalletKit.getListOfActiveSessions()
+                .map { s ->
+                    s.expiry to WcSessionInfo(
+                        topic = s.topic,
+                        name = s.metaData?.name ?: "dApp",
+                        url = s.metaData?.url ?: "",
+                    )
+                }
+                // One card per dApp identity: duplicate and ghost sessions to
+                // the same peer (agents abandoned without a clean disconnect
+                // linger until expiry) collapse to the freshest one.
+                .sortedByDescending { it.first ?: 0L }
+                .distinctBy { it.second.stableId }
+                .map { it.second }
         } catch (e: Throwable) {
             Log.i("WALLET", "WC: getListOfActiveSessions failed: $e")
             emptyList()
         }
         onSessions?.invoke(sessions)
+    }
+
+    /** Topics of every active session sharing a dApp identity. */
+    private fun topicsFor(stableId: String): List<String> = try {
+        WalletKit.getListOfActiveSessions()
+            .filter { dappStableId(it.metaData?.url, it.metaData?.name, it.topic) == stableId }
+            .map { it.topic }
+    } catch (e: Throwable) {
+        emptyList()
     }
 
     /** Disconnects a session by topic. */
@@ -125,6 +165,20 @@ object WalletConnectController {
             onSuccess = { refreshSessions() },
             onError = { error -> status("Disconnect failed: ${error.throwable.message}") },
         )
+    }
+
+    /** Disconnects every session for a dApp identity, clearing ghosts too. */
+    fun disconnectDapp(stableId: String) {
+        val topics = topicsFor(stableId)
+        synchronized(adapters) { topics.forEach { adapters.remove(it) } }
+        topics.forEach { topic ->
+            WalletKit.disconnectSession(
+                Wallet.Params.SessionDisconnect(sessionTopic = topic),
+                onSuccess = { refreshSessions() },
+                onError = { error -> status("Disconnect failed: ${error.throwable.message}") },
+            )
+        }
+        refreshSessions()
     }
 
     /** The dApp side (or the relay) ended a session. */
@@ -200,6 +254,10 @@ object WalletConnectController {
                     chainId = request.chainId ?: "",
                     method = request.request.method,
                     params = params,
+                    // Reown's WalletKit (1.7) hands a wallet no request expiry, only
+                    // sessions carry one, so the pending queue falls back to the
+                    // protocol default here; iOS gets the dApp's real deadline.
+                    expiresAt = null,
                 ),
             )
             val jsonRpc = when (response) {

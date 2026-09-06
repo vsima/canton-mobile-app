@@ -5,10 +5,101 @@ import CantonDappKit
 import CantonDappWalletKit
 import SwiftUI
 
-/// The Connect screen: pair a `wc:` link (typed, pasted, or scanned) and manage
-/// active WalletConnect sessions. The iOS twin of Android's `ConnectScreen`.
-struct ConnectView: View {
+/// The dApp roster: each connected agent or dApp with its spending limits at
+/// a glance; tap to manage. Pairing is the roster's one action, a `wc:` link
+/// scanned or pasted in the ``ConnectSheet``. The dApp's connect and each
+/// signature surface as approval sheets (``WcApprovalSheet``) — the key never
+/// leaves the device. The iOS twin of Android's `AgentsScreen`.
+struct DappsView: View {
     @Environment(WalletModel.self) private var model
+    @State private var showConnect = false
+    @State private var selected: WcSessionInfo?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if model.wcSessions.isEmpty {
+                    // The empty roster leads with the one action that fills it.
+                    Section {
+                        VStack(spacing: 12) {
+                            Image(systemName: "link")
+                                .font(.system(size: 40))
+                                .foregroundStyle(.secondary)
+                            Text("Nothing connected yet")
+                                .font(.headline)
+                            Text("An agent or dApp you connect can ask this wallet to sign in and pay. You set its spending limits; the key never leaves this device.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button("Connect an agent or dApp") { showConnect = true }
+                                .buttonStyle(.borderedProminent)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                    }
+                } else {
+                    Section {
+                        ForEach(model.wcSessions) { session in
+                            let policy = model.dappPolicies[session.stableId]
+                            Button {
+                                selected = session
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(session.name).font(.body)
+                                    if !session.url.isEmpty {
+                                        Text(session.url).font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Text(policySummary(policy))
+                                        .font(.caption)
+                                        .foregroundStyle(policy == nil ? Color.secondary : Color.accentColor)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } header: {
+                        Text("Connected dApps")
+                    } footer: {
+                        Text("Tap one to set its spending limits and see what it has done.")
+                    }
+                }
+                if let status = model.wcStatus {
+                    Section {
+                        Label(status, systemImage: "dot.radiowaves.left.and.right")
+                            .font(.caption)
+                    }
+                }
+            }
+            .navigationTitle("dApps")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showConnect = true
+                    } label: {
+                        Label("Connect", systemImage: "plus")
+                    }
+                }
+            }
+            .task { model.refreshWcSessions() }
+            .sheet(isPresented: $showConnect) { ConnectSheet() }
+            .sheet(item: $selected) { session in DappDetailSheet(session: session) }
+        }
+    }
+}
+
+/// One line of limits for the roster card.
+func policySummary(_ policy: DappSpendPolicy?) -> String {
+    guard let policy else { return "No limits set · every payment asks you" }
+    var parts: [String] = []
+    if let v = policy.maxPerTransaction { parts.append("max \(v) CC/payment") }
+    if let v = policy.dailyCap { parts.append("\(v) CC/day") }
+    if let v = policy.autoApproveBelow { parts.append("auto under \(v) CC") }
+    return parts.isEmpty ? "No limits set · every payment asks you" : parts.joined(separator: " · ")
+}
+
+/// The pairing action, hosted in a sheet off the dApps roster.
+struct ConnectSheet: View {
+    @Environment(WalletModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
     @State private var uri = ""
     @State private var showScanner = false
 
@@ -35,55 +126,141 @@ struct ConnectView: View {
                     }
                     Button("Connect") {
                         model.pairWalletConnect(uri)
-                        uri = ""
+                        dismiss()
                     }
                     .disabled(!isPairable)
-                } header: {
-                    Text("Pair a dApp")
                 } footer: {
-                    Text("Open a dApp's WalletConnect QR, then scan or paste its wc: link here.")
-                }
-
-                if let status = model.wcStatus {
-                    Section {
-                        Label(status, systemImage: "dot.radiowaves.left.and.right")
-                            .font(.caption)
-                    }
-                }
-
-                Section("Connected dApps") {
-                    if model.wcSessions.isEmpty {
-                        Text("No active sessions.").foregroundStyle(.secondary)
-                    }
-                    ForEach(model.wcSessions) { session in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(session.name).font(.body)
-                                if !session.url.isEmpty {
-                                    Text(session.url).font(.caption2).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Button("Disconnect", role: .destructive) {
-                                model.disconnectWcSession(topic: session.topic)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
+                    Text("Scan or paste a WalletConnect link (wc:…) shown by an agent or dApp. You approve sharing your account and approve each signature — the key never leaves this device.")
                 }
             }
-            .navigationTitle("Connect")
-            .task { model.refreshWcSessions() }
+            .navigationTitle("Connect an agent or dApp")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
             .sheet(isPresented: $showScanner) {
                 QRScannerSheet { scanned in
                     let trimmed = scanned.trimmingCharacters(in: .whitespacesAndNewlines)
                     if trimmed.hasPrefix("wc:") {
                         model.pairWalletConnect(trimmed)
+                        dismiss()
                     } else {
                         uri = trimmed
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Per-dApp detail: the spend-policy editor and that peer's slice of the
+/// activity feed. Policies take effect immediately; sessions read them fresh
+/// on every request. Auto-approval is a per-dApp opt-in with the caps as its
+/// hard bound, and the footer says exactly what it removes: the sheet.
+struct DappDetailSheet: View {
+    let session: WcSessionInfo
+    @Environment(WalletModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var seeded = false
+    @State private var maxPerTx = ""
+    @State private var dailyCap = ""
+    @State private var autoApprove = false
+    @State private var autoBelow = ""
+    @State private var saved = false
+
+    /// The token standard's decimal shape, positive; `Decimal(string:)` alone
+    /// accepts trailing garbage.
+    private func parsed(_ text: String) -> Decimal? {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t.wholeMatch(of: /\d+(\.\d+)?/) != nil,
+              let value = Decimal(string: t), value > 0 else { return nil }
+        return value
+    }
+    private var maxValid: Bool { maxPerTx.isEmpty || parsed(maxPerTx) != nil }
+    private var capValid: Bool { dailyCap.isEmpty || parsed(dailyCap) != nil }
+    private var autoValid: Bool { !autoApprove || parsed(autoBelow) != nil }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(session.name).font(.headline)
+                    if !session.url.isEmpty {
+                        Text(session.url).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    TextField("Max per payment (CC)", text: $maxPerTx)
+                        .keyboardType(.decimalPad)
+                        .foregroundStyle(maxValid ? Color.primary : Color.red)
+                        .onChange(of: maxPerTx) { saved = false }
+                    TextField("Daily cap, rolling 24h (CC)", text: $dailyCap)
+                        .keyboardType(.decimalPad)
+                        .foregroundStyle(capValid ? Color.primary : Color.red)
+                        .onChange(of: dailyCap) { saved = false }
+                } header: {
+                    Text("Spending limits")
+                } footer: {
+                    Text("Hard limits this wallet enforces before anything reaches you. A request outside them is refused without asking; it still shows in Activity. Empty = no cap.")
+                }
+                Section {
+                    Toggle("Auto-approve small payments", isOn: $autoApprove)
+                        .onChange(of: autoApprove) { saved = false }
+                    if autoApprove {
+                        TextField("Auto-approve at or under (CC)", text: $autoBelow)
+                            .keyboardType(.decimalPad)
+                            .foregroundStyle(autoValid ? Color.primary : Color.red)
+                            .onChange(of: autoBelow) { saved = false }
+                    }
+                } footer: {
+                    Text("Payments at or under the amount execute with no approval sheet. You get a notification and an Activity entry instead.")
+                }
+                Section {
+                    Button(saved ? "Saved" : "Save limits") {
+                        let policy = DappSpendPolicy(
+                            maxPerTransaction: parsed(maxPerTx),
+                            dailyCap: parsed(dailyCap),
+                            autoApproveBelow: autoApprove ? parsed(autoBelow) : nil
+                        )
+                        let empty = policy.maxPerTransaction == nil
+                            && policy.dailyCap == nil && policy.autoApproveBelow == nil
+                        model.setDappPolicy(session.stableId, empty ? nil : policy)
+                        saved = true
+                    }
+                    .disabled(!(maxValid && capValid && autoValid))
+                }
+                let peerActivity = model.agentActivity.filter { $0.peerId == session.stableId }
+                if !peerActivity.isEmpty {
+                    Section("Activity") {
+                        ForEach(Array(peerActivity.prefix(20).enumerated()), id: \.offset) { _, activity in
+                            AgentActivityRow(activity: activity)
+                        }
+                    }
+                }
+                Section {
+                    Button("Disconnect", role: .destructive) {
+                        model.disconnectDapp(stableId: session.stableId)
+                        dismiss()
+                    }
+                }
+            }
+            .navigationTitle(session.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .onAppear {
+                guard !seeded else { return }
+                seeded = true
+                let existing = model.dappPolicy(session.stableId)
+                maxPerTx = existing?.maxPerTransaction.map { "\($0)" } ?? ""
+                dailyCap = existing?.dailyCap.map { "\($0)" } ?? ""
+                autoApprove = existing?.autoApproveBelow != nil
+                autoBelow = existing?.autoApproveBelow.map { "\($0)" } ?? ""
             }
         }
     }
@@ -97,7 +274,7 @@ struct WcApprovalSheet: View {
 
     /// Accent for the sheet that moves funds; the brand orange, deliberately
     /// not a semantic color so it reads the same in light and dark.
-    private static let transactionAccent = Color(red: 0.91, green: 0.31, blue: 0.18)
+    static let transactionAccent = Color(red: 0.91, green: 0.31, blue: 0.18)
 
     var body: some View {
         NavigationStack {
@@ -250,14 +427,30 @@ struct WcApprovalSheet: View {
     }
 
     private func buttons(approveTitle: String, onApprove: @escaping () -> Void) -> some View {
-        HStack {
-            Button("Decline", role: .cancel) {
-                approval.resolve(.rejected(reason: "Declined"))
+        VStack(alignment: .leading, spacing: 10) {
+            // The request has a clock. Swiping the sheet away keeps it waiting
+            // on the Activity tab; this is how long it can wait.
+            Label {
+                HStack(spacing: 4) {
+                    Text("Expires in")
+                    Text(approval.expiresAt, style: .timer)
+                        .monospacedDigit()
+                    Text("· swipe down to decide later")
+                }
+            } icon: {
+                Image(systemName: "hourglass")
             }
-            .buttonStyle(.bordered)
-            Spacer()
-            Button(approveTitle, action: onApprove)
-                .buttonStyle(.borderedProminent)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            HStack {
+                Button("Decline", role: .cancel) {
+                    approval.resolve(.rejected(reason: "Declined"))
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+                Button(approveTitle, action: onApprove)
+                    .buttonStyle(.borderedProminent)
+            }
         }
         .padding(.top, 8)
     }

@@ -59,19 +59,52 @@ final class WalletModel {
 
     // ── WalletConnect (dApp connect) ───────────────────────────────────
     /// A WalletConnect request the engine surfaced for approval — the CIP-0103
-    /// request plus a `resolve` to answer it. Non-nil drives the approval sheet;
-    /// the sheet calls `resolve`.
+    /// request plus a `resolve` to answer it. It waits in `pendingApprovals`
+    /// until a sheet button, or the expiry timer, resolves it.
     struct WcApproval: Identifiable {
-        let id = UUID()
+        let id: UUID
         let request: DappApprovalRequest
+        /// When the request arrived.
+        let receivedAt: Date
+        /// When an unanswered request is declined on the user's behalf: the
+        /// dApp's own deadline from the WalletConnect envelope, or, for a
+        /// transport that carries none, WalletConnect's default request TTL
+        /// from receipt.
+        let expiresAt: Date
         let resolve: (DappApproval) -> Void
     }
-    private(set) var pendingApproval: WcApproval?
+    /// Requests awaiting an answer, oldest first. A request stays here when
+    /// its sheet is swiped away, so the Activity tab can reopen it until it
+    /// expires; it leaves on approve, decline, or expiry.
+    private(set) var pendingApprovals: [WcApproval] = []
+    /// The request whose sheet is up right now, if any.
+    private(set) var presentedApproval: WcApproval?
+    private var approvalExpiryTasks: [UUID: Task<Void, Never>] = [:]
+    /// WalletConnect's default TTL for a session request; the fallback when
+    /// the envelope names no deadline.
+    static let approvalTTL: TimeInterval = 300
+    /// The decline reason recorded when a request runs out of time; the
+    /// Activity feed renders it as expired rather than declined.
+    static let expiredReason = "Expired before you answered"
+    /// Everything on the Activity tab that wants the user: transfer offers,
+    /// requests waiting for a sheet, and sheetless agent events not yet seen.
+    var activityBadge: Int { inbox.count + pendingApprovals.count + unseenAgentEvents }
     /// Last WalletConnect status line, shown on the Connect screen.
     private(set) var wcStatus: String?
     /// Active WalletConnect sessions, shown on the Connect screen.
     private(set) var wcSessions: [WcSessionInfo] = []
     private var cantonWc = false
+
+    // ── Agent surface: policies + activity ─────────────────────────────
+    /// Policies, activity, and spend receipts for the agent surface.
+    private let agentStore = AgentStore()
+    /// The agent activity feed, newest first, loaded from `agentStore`.
+    private(set) var agentActivity: [DappActivity] = []
+    /// Sheetless events (auto-approved, refused, rate-limited) not yet seen
+    /// on the Activity tab; drives the tab badge.
+    private(set) var unseenAgentEvents = 0
+    /// Per-peer spend policies, mirrored from `agentStore` for the roster.
+    private(set) var dappPolicies: [String: DappSpendPolicy] = [:]
 
     /// A checkout URL delivered by a `canton-checkout:` deep link (`.onOpenURL`),
     /// awaiting the Send view to parse and prefill it.
@@ -596,21 +629,59 @@ final class WalletModel {
         ]
     }
 
-    /// The engine's approval delegate: suspends, surfacing the request as
-    /// `pendingApproval` until the sheet answers it.
-    private func awaitApproval(_ request: DappApprovalRequest) async -> DappApproval {
+    /// The engine's approval delegate: suspends, queueing the request in
+    /// `pendingApprovals` (and presenting it if nothing else is up) until a
+    /// sheet button, or the expiry timer, answers it. The timer runs on the
+    /// dApp's deadline when the transport carried one.
+    private func awaitApproval(_ request: DappApprovalRequest, context: DappRequestContext) async -> DappApproval {
         await withCheckedContinuation { continuation in
-            // `resolve` may be called by a sheet button and again by a
-            // swipe-dismiss; the guard keeps the continuation resumed once.
-            // Only ever touched on the main actor, so the flag needs no lock.
+            // `resolve` may race between a sheet button and the expiry timer;
+            // the guard keeps the continuation resumed once. Only ever touched
+            // on the main actor, so the flag needs no lock.
             var resumed = false
-            self.pendingApproval = WcApproval(request: request) { [weak self] answer in
+            let id = UUID()
+            let now = Date()
+            let expiresAt = context.expiresAt ?? now.addingTimeInterval(Self.approvalTTL)
+            let approval = WcApproval(
+                id: id,
+                request: request,
+                receivedAt: now,
+                expiresAt: expiresAt
+            ) { [weak self] answer in
                 guard !resumed else { return }
                 resumed = true
-                self?.pendingApproval = nil
+                self?.settleApproval(id)
                 continuation.resume(returning: answer)
             }
+            pendingApprovals.append(approval)
+            if presentedApproval == nil { presentedApproval = approval }
+            approvalExpiryTasks[id] = Task { @MainActor [weak self] in
+                let wait = max(0, expiresAt.timeIntervalSince(Date()))
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled, let self else { return }
+                self.pendingApprovals.first { $0.id == id }?.resolve(.rejected(reason: Self.expiredReason))
+            }
         }
+    }
+
+    /// Drops an answered request from the queue and takes its sheet down.
+    /// Anything else waiting stays on the Activity tab (badged) rather than
+    /// rising in the same spot the user just tapped: a look-alike sheet
+    /// appearing under a finger is how one approval becomes two.
+    private func settleApproval(_ id: UUID) {
+        approvalExpiryTasks.removeValue(forKey: id)?.cancel()
+        pendingApprovals.removeAll { $0.id == id }
+        if presentedApproval?.id == id { presentedApproval = nil }
+    }
+
+    /// The sheet was swiped away: the request stays pending, and reopenable
+    /// from Activity, until it is answered or expires.
+    func dismissPresentedApproval() { presentedApproval = nil }
+
+    /// Brings a pending request's sheet back, if it is still waiting.
+    func reopenApproval(_ id: UUID) {
+        guard let approval = pendingApprovals.first(where: { $0.id == id }) else { return }
+        presentedApproval = approval
     }
 
     /// Builds the provider engine + WalletConnect adapter once the wallet is
@@ -655,8 +726,8 @@ final class WalletModel {
             let session = DappSession(
                 peer: peer,
                 accounts: ClosureAccountsSource { [weak self] in await self?.dappAccounts() ?? [] },
-                approver: ClosureApprover { [weak self] request in
-                    await self?.awaitApproval(request) ?? .rejected(reason: "wallet unavailable")
+                approver: ClosureApprover { [weak self] request, context in
+                    await self?.awaitApproval(request, context: context) ?? .rejected(reason: "wallet unavailable")
                 },
                 network: DappNetworkConfig(
                     networkId: Self.dappNetworkId,
@@ -664,12 +735,61 @@ final class WalletModel {
                     synchronizerId: synchronizerId
                 ),
                 messageSigner: HexMessageSigner(driver: self.driver ?? driver),
-                prepareExecute: pipeline
+                prepareExecute: pipeline,
+                spendPolicy: { [agentStore] in agentStore.policy(peer.id) },
+                spendLedger: agentStore.receiptsLedger,
+                activityObserver: { [weak self] activity in
+                    Task { @MainActor in self?.handleAgentActivity(activity) }
+                }
             )
             return try? CantonWalletConnect(handler: session, networkId: Self.dappNetworkId)
         }
+        loadAgentActivity()
         print("WALLET: WalletConnect enabled for \(partyId?.prefix(24) ?? "")…")
     }
+
+    private static let silentKinds: Set<DappActivity.Kind> = [
+        .transactionAutoApproved, .transactionRefused, .transactionRateLimited,
+    ]
+
+    /// Called for every session activity event. Persists first, then
+    /// updates the feed state and, for the sheetless kinds, the badge and
+    /// the local notification.
+    private func handleAgentActivity(_ activity: DappActivity) {
+        agentStore.appendActivity(activity)
+        agentActivity.insert(activity, at: 0)
+        if Self.silentKinds.contains(activity.kind) {
+            unseenAgentEvents += 1
+            AgentNotifications.notify(activity)
+        }
+    }
+
+    /// Loads the persisted feed (newest first) and policies once the wallet is up.
+    private func loadAgentActivity() {
+        let store = agentStore
+        Task.detached(priority: .utility) { [weak self] in
+            let loaded = Array(store.activity().reversed())
+            let policies = store.policies()
+            await MainActor.run {
+                self?.agentActivity = loaded
+                self?.dappPolicies = policies
+            }
+        }
+    }
+
+    /// The Activity tab was opened; the silent-event badge resets.
+    func markAgentActivitySeen() { unseenAgentEvents = 0 }
+
+    func dappPolicy(_ peerId: String) -> DappSpendPolicy? { agentStore.policy(peerId) }
+
+    /// Persists the per-dApp policy; sessions read it fresh on every request.
+    func setDappPolicy(_ peerId: String, _ policy: DappSpendPolicy?) {
+        agentStore.setPolicy(peerId, policy)
+        if let policy { dappPolicies[peerId] = policy } else { dappPolicies.removeValue(forKey: peerId) }
+    }
+
+    /// Disconnects every session for a dApp identity, clearing ghosts.
+    func disconnectDapp(stableId: String) { WalletConnectController.shared.disconnectDapp(stableId: stableId) }
 
     /// Hands a scanned/pasted `wc:` pairing URI to the Reown client.
     func pairWalletConnect(_ uri: String) {
@@ -707,8 +827,10 @@ private struct ClosureAccountsSource: DappAccountsSource {
 }
 
 private struct ClosureApprover: DappApprovalDelegate {
-    let handler: @Sendable (DappApprovalRequest) async -> DappApproval
-    func approve(_ request: DappApprovalRequest) async -> DappApproval { await handler(request) }
+    let handler: @Sendable (DappApprovalRequest, DappRequestContext) async -> DappApproval
+    func approve(_ request: DappApprovalRequest, context: DappRequestContext) async -> DappApproval {
+        await handler(request, context)
+    }
 }
 
 /// Signs a CIP-0103 message with the enclave driver over the domain-separated

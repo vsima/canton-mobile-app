@@ -22,6 +22,21 @@ struct WcSessionInfo: Identifiable, Equatable {
     let topic: String
     let name: String
     let url: String
+
+    /// A stable identity for the connected peer, used to key its spend
+    /// policy and activity so both survive reconnection and are shared
+    /// across any duplicate sessions to the same dApp. The session topic is
+    /// per-pairing and would lose the policy on every reconnect; the URL
+    /// (else the name) identifies the dApp itself. Self-reported, so the
+    /// approval sheets still show the unverified warning.
+    var stableId: String { dappStableId(url: url, name: name, topic: topic) }
+}
+
+/// See `WcSessionInfo.stableId`. Shared so the peer id and the roster agree.
+func dappStableId(url: String?, name: String?, topic: String) -> String {
+    if let url, !url.isEmpty { return url }
+    if let name, !name.isEmpty { return name }
+    return topic
 }
 
 /// The Reown WalletKit binding: the relay/pairing/session client that carries
@@ -97,6 +112,12 @@ final class WalletConnectController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] (topic, _) in self?.handleDelete(topic: topic) }
             .store(in: &cancellables)
+        // Relay socket transitions, for the console: a lost response or a
+        // late-delivered request almost always lines up with one of these.
+        WalletKit.instance.socketConnectionStatusPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { status in print("WALLET: WC relay socket \(status)") }
+            .store(in: &cancellables)
     }
 
     /// Registers the accounts the wallet may share and the per-peer adapter
@@ -124,11 +145,14 @@ final class WalletConnectController {
         guard let adapterFactory else { return nil }
         let meta = WalletKit.instance.getSessions().first { $0.topic == topic }?.peer
         let name = (meta?.name).flatMap { $0.isEmpty ? nil : $0 } ?? "Unidentified dApp"
+        let url = (meta?.url).flatMap { $0.isEmpty ? nil : $0 }
         let adapter = adapterFactory(
             DappPeer(
-                id: topic,
+                // Stable across reconnections so policy and activity follow
+                // the dApp, not the ephemeral session; see WcSessionInfo.stableId.
+                id: dappStableId(url: url, name: name, topic: topic),
                 name: name,
-                url: (meta?.url).flatMap { $0.isEmpty ? nil : $0 },
+                url: url,
                 iconUrl: meta?.icons.first { !$0.isEmpty },
                 verified: verify?.validation == .valid
             )
@@ -225,12 +249,16 @@ final class WalletConnectController {
         guard let adapter = adapterFor(topic: request.topic, verify: verify) else { return }
         let topic = request.topic
         let requestId = request.id
+        // The id is what tells a redelivery from a new request in the console.
+        print("WALLET: WC request \(request.method) id=\(Self.requestId(request.id)) topic=\(topic.prefix(8))…")
         let wc = WcRequest(
             topic: request.topic,
             requestId: Self.requestId(request.id),
             chainId: request.chainId.absoluteString,
             method: request.method,
-            params: try? Self.jsonValue(from: request.params)
+            params: try? Self.jsonValue(from: request.params),
+            // The dApp's own deadline; the pending queue runs on it.
+            expiresAt: request.expiryTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         )
         Task {
             let response = await adapter.handle(wc)
@@ -250,7 +278,9 @@ final class WalletConnectController {
                 result = .error(JSONRPCError(code: code, message: message))
             }
             try await WalletKit.instance.respond(topic: topic, requestId: requestId, response: result)
+            print("WALLET: WC responded id=\(Self.requestId(requestId)) topic=\(topic.prefix(8))…")
         } catch {
+            print("WALLET: WC respond FAILED id=\(Self.requestId(requestId)) topic=\(topic.prefix(8))… \(error)")
             await setStatus("Respond failed: \(error.localizedDescription)")
         }
     }
@@ -270,9 +300,33 @@ final class WalletConnectController {
     }
 
     private func publish(_ sessions: [Session]) {
-        onSessions?(sessions.map {
-            WcSessionInfo(topic: $0.topic, name: $0.peer.name.isEmpty ? "dApp" : $0.peer.name, url: $0.peer.url)
-        })
+        // One card per dApp identity: duplicate and ghost sessions to the
+        // same peer (agents abandoned without a clean disconnect linger
+        // until expiry) collapse to the freshest one.
+        var seen = Set<String>()
+        let deduped = sessions
+            .sorted { $0.expiryDate > $1.expiryDate }
+            .map { WcSessionInfo(topic: $0.topic, name: $0.peer.name.isEmpty ? "dApp" : $0.peer.name, url: $0.peer.url) }
+            .filter { seen.insert($0.stableId).inserted }
+        onSessions?(deduped)
+    }
+
+    /// Disconnects every session for a dApp identity, clearing ghosts too.
+    func disconnectDapp(stableId: String) {
+        let topics = WalletKit.instance.getSessions()
+            .filter { dappStableId(url: $0.peer.url, name: $0.peer.name, topic: $0.topic) == stableId }
+            .map(\.topic)
+        for topic in topics {
+            adapters[topic] = nil
+            peerNames[topic] = nil
+        }
+        Task {
+            for topic in topics {
+                do { try await WalletKit.instance.disconnect(topic: topic) }
+                catch { onStatus?("Disconnect failed: \(error.localizedDescription)") }
+            }
+            refreshSessions()
+        }
     }
 
     // MARK: - Mapping helpers

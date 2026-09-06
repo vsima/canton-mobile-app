@@ -4,47 +4,6 @@
 import CantonWalletKit
 import SwiftUI
 
-/// Holdings changes as a wallet-history list, from the SDK's parsed
-/// ACS-delta stream. Standard List with date-relative rows.
-struct HistoryView: View {
-    @Environment(WalletModel.self) private var model
-    @State private var selected: TokenStandardClient.HoldingsChange?
-
-    /// The offer leg of a two-step transfer nets to zero (holdings only
-    /// lock); the settlement leg carries the value. Hide the zero-net noise
-    /// from the list — the detail sheet still has everything.
-    private var visible: [TokenStandardClient.HoldingsChange] {
-        model.history.filter { change in
-            guard let summary = change.summary else { return true }
-            return (Decimal(string: summary.amount) ?? 0) != 0
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if visible.isEmpty {
-                    Text("No activity yet.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(visible, id: \.updateId) { change in
-                    Button {
-                        selected = change
-                    } label: {
-                        HistoryRow(change: change)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .navigationTitle("History")
-            .refreshable { await model.refresh() }
-            .sheet(item: $selected) { change in
-                ChangeDetailView(change: change)
-            }
-        }
-    }
-}
-
 /// One display label per history row and detail — from the SDK's transfer
 /// summary when present, from the raw created/archived deltas otherwise.
 /// `.unknown` with a positive net is how taps and preapproved direct
