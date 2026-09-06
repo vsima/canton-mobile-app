@@ -113,8 +113,11 @@ struct ActivityView: View {
                         }
                     }
                 }
-                .listStyle(.plain)
+                .listStyle(.insetGrouped)
             }
+            // The same grouped canvas as Portfolio and dApps: the segmented
+            // control's track and selected pill need a gray ground to read.
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Activity")
             .refreshable { await model.refresh() }
             .sheet(item: $selected) { change in
