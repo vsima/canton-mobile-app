@@ -109,6 +109,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Payments
+import androidx.compose.material.icons.outlined.HourglassEmpty
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import io.github.vsima.canton.dapp.wallet.DappApproval
@@ -307,7 +310,7 @@ private fun WalletTabs(model: WalletModel) {
                         // Pending inbox requests need action; unseen silent
                         // agent events need attention. Both land on Activity.
                         val badgeCount = if (item == Section.Activity) {
-                            model.inbox.size + model.unseenAgentEvents
+                            model.activityBadge
                         } else {
                             0
                         }
@@ -667,8 +670,11 @@ private fun InboxScreen(model: WalletModel) {
         },
     ) {
     LazyColumn {
-        if (model.inbox.isEmpty()) {
-            item { ListItem(headlineContent = { Text("No pending offers.") }) }
+        if (model.inbox.isEmpty() && model.pendingApprovals.isEmpty()) {
+            item { ListItem(headlineContent = { Text("No pending requests.") }) }
+        }
+        items(model.pendingApprovals, key = { it.id }) { approval ->
+            PendingApprovalRow(approval) { model.reopenApproval(approval.id) }
         }
         items(model.inbox, key = { it.contractId }) { offer ->
             ListItem(
@@ -1200,6 +1206,74 @@ private fun TransferRow(change: TokenStandardClient.HoldingsChange, onClick: () 
             HorizontalDivider()
 }
 
+/** A WalletConnect request still waiting for an answer: its sheet was swiped
+ *  away (or another sheet was up when it arrived). Tapping brings the sheet
+ *  back; the countdown is the request's remaining life. */
+@Composable
+private fun PendingApprovalRow(approval: WalletModel.WcApproval, onOpen: () -> Unit) {
+    val (icon, tint, title) = when (val request = approval.request) {
+        is DappApprovalRequest.Connection ->
+            Triple(Icons.Outlined.Link, MaterialTheme.colorScheme.primary, "Connection request")
+        is DappApprovalRequest.Message ->
+            Triple(Icons.Outlined.Key, MaterialTheme.colorScheme.tertiary, "Sign-in request")
+        is DappApprovalRequest.Transaction -> {
+            val amount = io.github.vsima.canton.dapp.wallet.DappCommandSummary.transferOf(request.submission)
+                ?.let { "${it.amount} ${if (it.instrumentId == "Amulet") "CC" else it.instrumentId}" }
+            Triple(Icons.Outlined.Payments, TransactionAccent, "Payment request" + (amount?.let { ": $it" } ?: ""))
+        }
+    }
+    ListItem(
+        modifier = Modifier.clickable(onClick = onOpen),
+        leadingContent = { Icon(icon, contentDescription = null, tint = tint) },
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Column {
+                Text(
+                    approval.request.peer.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "Waiting for you · tap to review",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.HourglassEmpty,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.size(4.dp))
+                    Text(
+                        "Expires in ${countdownTo(approval.expiresAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        trailingContent = {
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null)
+        },
+    )
+    HorizontalDivider()
+}
+
+/** A once-a-second "m:ss" countdown to [deadline], clamped at 0:00. */
+@Composable
+private fun countdownTo(deadline: Instant): String {
+    val now by produceState(Instant.now(), deadline) {
+        while (true) {
+            value = Instant.now()
+            delay(1_000)
+        }
+    }
+    val left = Duration.between(now, deadline).coerceAtLeast(Duration.ZERO)
+    return "%d:%02d".format(left.toMinutes(), left.seconds % 60)
+}
+
 /** One agent-activity row: what a connected dApp did or tried, sheet or no
  *  sheet. The silent kinds carry their own tints so refusals and
  *  auto-approvals read at a glance. */
@@ -1227,7 +1301,11 @@ private fun AgentActivityRow(activity: io.github.vsima.canton.dapp.wallet.DappAc
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_RATE_LIMITED ->
             Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.error, "Rate-limited")
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_DECLINED ->
-            Triple(Icons.Outlined.Payments, MaterialTheme.colorScheme.onSurfaceVariant, "Payment declined")
+            Triple(
+                Icons.Outlined.Payments,
+                MaterialTheme.colorScheme.onSurfaceVariant,
+                if (activity.detail == WalletModel.EXPIRED_REASON) "Payment request expired" else "Payment declined",
+            )
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_EXECUTED ->
             Triple(Icons.Outlined.Payments, Color(0xFF2E7D32), "Paid" + (amount?.let { " $it" } ?: ""))
         io.github.vsima.canton.dapp.wallet.DappActivity.Kind.TRANSACTION_FAILED ->
@@ -1337,6 +1415,13 @@ private fun ActivityScreen(model: WalletModel) {
                             agents.map { it.at.toEpochMilli() to it as Any }
                         ).sortedByDescending { it.first }.map { it.second }
                     LazyColumn {
+                        // A request whose sheet was swiped away waits here,
+                        // tappable, until it is answered or expires.
+                        if (filter == ActivityFilter.All) {
+                            items(model.pendingApprovals, key = { it.id }) { approval ->
+                                PendingApprovalRow(approval) { model.reopenApproval(approval.id) }
+                            }
+                        }
                         if (filter == ActivityFilter.All && model.inbox.isNotEmpty()) {
                             item {
                                 ListItem(
@@ -1707,13 +1792,14 @@ private fun DappDetailSheet(model: WalletModel, session: WcSessionInfo, onDismis
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WcApprovalSheet(model: WalletModel) {
-    val approval = model.pendingApproval ?: return
+    val approval = model.presentedApproval ?: return
     // Skip the half-expanded state so the whole approval (amount, party, actions)
     // is visible at once, and pad past the system navigation bar so the buttons
-    // clear the gesture bar.
+    // clear the gesture bar. Swiping the sheet away answers nothing: the request
+    // stays pending, and the Activity tab can reopen it until it expires.
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
-        onDismissRequest = { approval.resolve(DappApproval.Rejected("Dismissed")) },
+        onDismissRequest = { model.dismissPresentedApproval() },
         sheetState = sheetState,
     ) {
         Column(
@@ -1746,6 +1832,7 @@ private fun WcApprovalSheet(model: WalletModel) {
                     }
                     ApprovalFactRow("Network", request.network.networkId)
                     WcApprovalButtons(
+                        expiresAt = approval.expiresAt,
                         approveLabel = "Connect",
                         onApprove = { approval.resolve(DappApproval.Approved(request.available)) },
                         onReject = { approval.resolve(DappApproval.Rejected("Declined")) },
@@ -1782,6 +1869,7 @@ private fun WcApprovalSheet(model: WalletModel) {
                         }
                     }
                     WcApprovalButtons(
+                        expiresAt = approval.expiresAt,
                         approveLabel = "Sign",
                         onApprove = { approval.resolve(DappApproval.Approved()) },
                         onReject = { approval.resolve(DappApproval.Rejected("Declined")) },
@@ -1854,6 +1942,7 @@ private fun WcApprovalSheet(model: WalletModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     WcApprovalButtons(
+                        expiresAt = approval.expiresAt,
                         approveLabel = "Approve",
                         onApprove = { approval.resolve(DappApproval.Approved()) },
                         onReject = { approval.resolve(DappApproval.Rejected("Declined")) },
@@ -1946,16 +2035,39 @@ private fun ApprovalFactRow(label: String, value: String, mono: Boolean = false)
 }
 
 @Composable
-private fun WcApprovalButtons(approveLabel: String, onApprove: () -> Unit, onReject: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(top = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        OutlinedButton(
-            onClick = onReject,
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-        ) { Text("Reject") }
-        Button(onClick = onApprove, modifier = Modifier.weight(1f)) { Text(approveLabel) }
+private fun WcApprovalButtons(
+    approveLabel: String,
+    expiresAt: Instant,
+    onApprove: () -> Unit,
+    onReject: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // The request has a clock. Swiping the sheet away keeps it waiting on
+        // the Activity tab; this is how long it can wait.
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Icon(
+                Icons.Outlined.HourglassEmpty,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                "Expires in ${countdownTo(expiresAt)} · swipe down to decide later",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(
+                onClick = onReject,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("Reject") }
+            Button(onClick = onApprove, modifier = Modifier.weight(1f)) { Text(approveLabel) }
+        }
     }
 }

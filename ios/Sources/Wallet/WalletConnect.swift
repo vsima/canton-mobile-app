@@ -243,6 +243,8 @@ final class WalletConnectController {
         guard let adapter = adapterFor(topic: request.topic, verify: verify) else { return }
         let topic = request.topic
         let requestId = request.id
+        // The id is what tells a redelivery from a new request in the console.
+        print("WALLET: WC request \(request.method) id=\(Self.requestId(request.id)) topic=\(topic.prefix(8))…")
         let wc = WcRequest(
             topic: request.topic,
             requestId: Self.requestId(request.id),

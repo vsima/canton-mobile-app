@@ -59,14 +59,34 @@ final class WalletModel {
 
     // ── WalletConnect (dApp connect) ───────────────────────────────────
     /// A WalletConnect request the engine surfaced for approval — the CIP-0103
-    /// request plus a `resolve` to answer it. Non-nil drives the approval sheet;
-    /// the sheet calls `resolve`.
+    /// request plus a `resolve` to answer it. It waits in `pendingApprovals`
+    /// until a sheet button, or the expiry timer, resolves it.
     struct WcApproval: Identifiable {
-        let id = UUID()
+        let id: UUID
         let request: DappApprovalRequest
+        /// When the request arrived.
+        let receivedAt: Date
+        /// When an unanswered request is declined on the user's behalf. The
+        /// SDK's request envelope carries no dApp expiry yet, so this is
+        /// WalletConnect's default session-request TTL from receipt.
+        let expiresAt: Date
         let resolve: (DappApproval) -> Void
     }
-    private(set) var pendingApproval: WcApproval?
+    /// Requests awaiting an answer, oldest first. A request stays here when
+    /// its sheet is swiped away, so the Activity tab can reopen it until it
+    /// expires; it leaves on approve, decline, or expiry.
+    private(set) var pendingApprovals: [WcApproval] = []
+    /// The request whose sheet is up right now, if any.
+    private(set) var presentedApproval: WcApproval?
+    private var approvalExpiryTasks: [UUID: Task<Void, Never>] = [:]
+    /// WalletConnect's default TTL for a session request.
+    static let approvalTTL: TimeInterval = 300
+    /// The decline reason recorded when a request runs out of time; the
+    /// Activity feed renders it as expired rather than declined.
+    static let expiredReason = "Expired before you answered"
+    /// Everything on the Activity tab that wants the user: transfer offers,
+    /// requests waiting for a sheet, and sheetless agent events not yet seen.
+    var activityBadge: Int { inbox.count + pendingApprovals.count + unseenAgentEvents }
     /// Last WalletConnect status line, shown on the Connect screen.
     private(set) var wcStatus: String?
     /// Active WalletConnect sessions, shown on the Connect screen.
@@ -607,21 +627,56 @@ final class WalletModel {
         ]
     }
 
-    /// The engine's approval delegate: suspends, surfacing the request as
-    /// `pendingApproval` until the sheet answers it.
+    /// The engine's approval delegate: suspends, queueing the request in
+    /// `pendingApprovals` (and presenting it if nothing else is up) until a
+    /// sheet button, or the expiry timer, answers it.
     private func awaitApproval(_ request: DappApprovalRequest) async -> DappApproval {
         await withCheckedContinuation { continuation in
-            // `resolve` may be called by a sheet button and again by a
-            // swipe-dismiss; the guard keeps the continuation resumed once.
-            // Only ever touched on the main actor, so the flag needs no lock.
+            // `resolve` may race between a sheet button and the expiry timer;
+            // the guard keeps the continuation resumed once. Only ever touched
+            // on the main actor, so the flag needs no lock.
             var resumed = false
-            self.pendingApproval = WcApproval(request: request) { [weak self] answer in
+            let id = UUID()
+            let now = Date()
+            let approval = WcApproval(
+                id: id,
+                request: request,
+                receivedAt: now,
+                expiresAt: now.addingTimeInterval(Self.approvalTTL)
+            ) { [weak self] answer in
                 guard !resumed else { return }
                 resumed = true
-                self?.pendingApproval = nil
+                self?.settleApproval(id)
                 continuation.resume(returning: answer)
             }
+            pendingApprovals.append(approval)
+            if presentedApproval == nil { presentedApproval = approval }
+            approvalExpiryTasks[id] = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(Self.approvalTTL))
+                guard !Task.isCancelled, let self else { return }
+                self.pendingApprovals.first { $0.id == id }?.resolve(.rejected(reason: Self.expiredReason))
+            }
         }
+    }
+
+    /// Drops an answered request from the queue and takes its sheet down.
+    /// Anything else waiting stays on the Activity tab (badged) rather than
+    /// rising in the same spot the user just tapped: a look-alike sheet
+    /// appearing under a finger is how one approval becomes two.
+    private func settleApproval(_ id: UUID) {
+        approvalExpiryTasks.removeValue(forKey: id)?.cancel()
+        pendingApprovals.removeAll { $0.id == id }
+        if presentedApproval?.id == id { presentedApproval = nil }
+    }
+
+    /// The sheet was swiped away: the request stays pending, and reopenable
+    /// from Activity, until it is answered or expires.
+    func dismissPresentedApproval() { presentedApproval = nil }
+
+    /// Brings a pending request's sheet back, if it is still waiting.
+    func reopenApproval(_ id: UUID) {
+        guard let approval = pendingApprovals.first(where: { $0.id == id }) else { return }
+        presentedApproval = approval
     }
 
     /// Builds the provider engine + WalletConnect adapter once the wallet is

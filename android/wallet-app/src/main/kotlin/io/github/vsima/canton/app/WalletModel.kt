@@ -49,6 +49,7 @@ import io.github.vsima.canton.dapp.wallet.JsonLedgerApiClient
 import io.github.vsima.canton.dapp.wallet.JsonPrepareExecutePipeline
 import io.github.vsima.canton.wallet.InteractiveSubmissionClient
 import io.github.vsima.canton.dapp.wc.CantonWalletConnect
+import java.time.Instant
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withContext
 import io.grpc.CallOptions
@@ -230,15 +231,33 @@ class WalletModel(
     var lastSend by mutableStateOf<SendReceipt?>(null)
 
     /** A WalletConnect request the engine has surfaced for the user to approve —
-     *  the CIP-0103 approval request plus a [resolve] to answer it. Non-null
-     *  drives the approval sheet; the sheet calls [WcApproval.resolve]. */
+     *  the CIP-0103 approval request plus a [resolve] to answer it. It waits in
+     *  [pendingApprovals] until a sheet button, or the expiry timer, resolves it.
+     *  [expiresAt] is WalletConnect's default session-request TTL from receipt:
+     *  the SDK's request envelope carries no dApp expiry yet. */
     data class WcApproval(
+        val id: String,
         val request: DappApprovalRequest,
+        val receivedAt: Instant,
+        val expiresAt: Instant,
         val resolve: (DappApproval) -> Unit,
     )
 
-    var pendingApproval by mutableStateOf<WcApproval?>(null)
+    /** Requests awaiting an answer, oldest first. A request stays here when its
+     *  sheet is swiped away, so the Activity tab can reopen it until it expires;
+     *  it leaves on approve, decline, or expiry. */
+    var pendingApprovals by mutableStateOf<List<WcApproval>>(emptyList())
         private set
+
+    /** The request whose sheet is up right now, if any. */
+    var presentedApproval by mutableStateOf<WcApproval?>(null)
+        private set
+
+    private val approvalExpiryJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+
+    /** Everything on the Activity tab that wants the user: transfer offers,
+     *  requests waiting for a sheet, and sheetless agent events not yet seen. */
+    val activityBadge: Int get() = inbox.size + pendingApprovals.size + unseenAgentEvents
 
     /** Last WalletConnect status line, shown on the Connect screen. */
     var wcStatus by mutableStateOf<String?>(null)
@@ -822,17 +841,50 @@ class WalletModel(
 
     private var cantonWc: Boolean = false
 
-    /** The engine's approval delegate: suspends, surfacing the request as
-     *  [pendingApproval] until the sheet answers it. */
+    /** The engine's approval delegate: suspends, queueing the request in
+     *  [pendingApprovals] (and presenting it if nothing else is up) until a
+     *  sheet button, or the expiry timer, answers it. */
     private val approver = DappApprovalDelegate { request ->
         val decision = CompletableDeferred<DappApproval>()
         withContext(kotlinx.coroutines.Dispatchers.Main) {
-            pendingApproval = WcApproval(request) { answer ->
-                pendingApproval = null
-                decision.complete(answer)
+            val id = java.util.UUID.randomUUID().toString()
+            val now = Instant.now()
+            val approval = WcApproval(id, request, now, now.plusSeconds(APPROVAL_TTL_SECONDS)) { answer ->
+                // A sheet button and the expiry timer may race; the deferred
+                // completes once and the queue drops the entry once.
+                if (decision.complete(answer)) settleApproval(id)
+            }
+            pendingApprovals = pendingApprovals + approval
+            if (presentedApproval == null) presentedApproval = approval
+            approvalExpiryJobs[id] = scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                delay(APPROVAL_TTL_SECONDS * 1000)
+                pendingApprovals.firstOrNull { it.id == id }
+                    ?.resolve(DappApproval.Rejected(EXPIRED_REASON))
             }
         }
         decision.await()
+    }
+
+    /** Drops an answered request from the queue and takes its sheet down.
+     *  Anything else waiting stays on the Activity tab (badged) rather than
+     *  rising in the same spot the user just tapped: a look-alike sheet
+     *  appearing under a finger is how one approval becomes two. Main thread
+     *  only. */
+    private fun settleApproval(id: String) {
+        approvalExpiryJobs.remove(id)?.cancel()
+        pendingApprovals = pendingApprovals.filterNot { it.id == id }
+        if (presentedApproval?.id == id) presentedApproval = null
+    }
+
+    /** The sheet was swiped away: the request stays pending, and reopenable
+     *  from Activity, until it is answered or expires. */
+    fun dismissPresentedApproval() {
+        presentedApproval = null
+    }
+
+    /** Brings a pending request's sheet back, if it is still waiting. */
+    fun reopenApproval(id: String) {
+        presentedApproval = pendingApprovals.firstOrNull { it.id == id } ?: return
     }
 
     /** Signs a CIP-0103 message: the TEE driver over the domain-separated
@@ -1000,6 +1052,11 @@ class WalletModel(
         joinToString("") { byte -> "%02x".format(byte.toInt() and 0xFF) }
 
     companion object {
+        /** WalletConnect's default TTL for a session request. */
+        const val APPROVAL_TTL_SECONDS: Long = 300
+        /** The decline reason recorded when a request runs out of time; the
+         *  Activity feed renders it as expired rather than declined. */
+        const val EXPIRED_REASON = "Expired before you answered"
         /** Android Keystore alias holding this wallet's signing key. */
         const val KEY_ALIAS = "wallet"
 

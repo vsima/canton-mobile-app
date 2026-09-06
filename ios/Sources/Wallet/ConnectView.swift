@@ -427,14 +427,30 @@ struct WcApprovalSheet: View {
     }
 
     private func buttons(approveTitle: String, onApprove: @escaping () -> Void) -> some View {
-        HStack {
-            Button("Decline", role: .cancel) {
-                approval.resolve(.rejected(reason: "Declined"))
+        VStack(alignment: .leading, spacing: 10) {
+            // The request has a clock. Swiping the sheet away keeps it waiting
+            // on the Activity tab; this is how long it can wait.
+            Label {
+                HStack(spacing: 4) {
+                    Text("Expires in")
+                    Text(approval.expiresAt, style: .timer)
+                        .monospacedDigit()
+                    Text("· swipe down to decide later")
+                }
+            } icon: {
+                Image(systemName: "hourglass")
             }
-            .buttonStyle(.bordered)
-            Spacer()
-            Button(approveTitle, action: onApprove)
-                .buttonStyle(.borderedProminent)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            HStack {
+                Button("Decline", role: .cancel) {
+                    approval.resolve(.rejected(reason: "Declined"))
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+                Button(approveTitle, action: onApprove)
+                    .buttonStyle(.borderedProminent)
+            }
         }
         .padding(.top, 8)
     }

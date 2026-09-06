@@ -133,7 +133,7 @@ struct WalletTabsView: View {
                         selection: Binding(get: { Optional(section) }, set: { section = $0 ?? .portfolio })
                     ) { item in
                         Label(item.rawValue, systemImage: item.icon)
-                            .badge(item == .activity ? model.inbox.count + model.unseenAgentEvents : 0)
+                            .badge(item == .activity ? model.activityBadge : 0)
                             .tag(item)
                     }
                     .navigationTitle(model.environment.name)
@@ -151,7 +151,7 @@ struct WalletTabsView: View {
                         .tabItem { Label("Activity", systemImage: "clock") }
                         // Pending requests need action; unseen silent agent
                         // events need attention. Both land on Activity.
-                        .badge(model.inbox.count + model.unseenAgentEvents)
+                        .badge(model.activityBadge)
                         .tag(WalletSection.activity)
                     DappsView()
                         .tabItem { Label("dApps", systemImage: "link") }
@@ -165,11 +165,12 @@ struct WalletTabsView: View {
             if url != nil { section = .portfolio }
         }
         // The WalletConnect approval sheet, mounted once above the shell so it
-        // rises over any tab. Dismissing it (swipe) rejects the request.
+        // rises over any tab. Swiping it away answers nothing: the request
+        // stays pending, and the Activity tab can reopen it until it expires.
         .sheet(item: Binding(
-            get: { model.pendingApproval },
+            get: { model.presentedApproval },
             set: { newValue in
-                if newValue == nil { model.pendingApproval?.resolve(.rejected(reason: "Dismissed")) }
+                if newValue == nil { model.dismissPresentedApproval() }
             }
         )) { approval in
             WcApprovalSheet(approval: approval)
@@ -233,6 +234,9 @@ struct PortfolioView: View {
                                 transferPage = .send
                             } label: {
                                 Label("Send", systemImage: "arrow.up.right")
+                                    // Inside a Form row the label's icon takes the list
+                                    // tint, not the prominent button's white — pin both.
+                                    .foregroundStyle(Color.white)
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)

@@ -72,13 +72,17 @@ struct ActivityView: View {
                 .padding(.bottom, 8)
                 List {
                     if filter == .requests {
-                        if model.inbox.isEmpty {
+                        if model.inbox.isEmpty, model.pendingApprovals.isEmpty {
                             Text("No pending requests.").foregroundStyle(.secondary)
                         }
+                        pendingApprovalRows
                         ForEach(model.inbox, id: \.contractId) { offer in
                             InboxOfferRow(offer: offer)
                         }
                     } else {
+                        // A request whose sheet was swiped away waits here,
+                        // tappable, until it is answered or expires.
+                        if filter == .all { pendingApprovalRows }
                         if filter == .all, !model.inbox.isEmpty {
                             Button {
                                 filter = .requests
@@ -128,6 +132,66 @@ struct ActivityView: View {
     }
 }
 
+extension ActivityView {
+    @ViewBuilder
+    fileprivate var pendingApprovalRows: some View {
+        ForEach(model.pendingApprovals) { approval in
+            Button {
+                model.reopenApproval(approval.id)
+            } label: {
+                PendingApprovalRow(approval: approval)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+/// A WalletConnect request still waiting for an answer: its sheet was swiped
+/// away (or another sheet was up when it arrived). Tapping brings the sheet
+/// back; the countdown is the request's remaining life.
+struct PendingApprovalRow: View {
+    let approval: WalletModel.WcApproval
+
+    private var style: (icon: String, tint: Color, title: String) {
+        switch approval.request {
+        case .connection: return ("link", Color.accentColor, "Connection request")
+        case .message: return ("key", Color.purple, "Sign-in request")
+        case .transaction(_, _, _, let submission):
+            let amount = DappCommandSummary.transferOf(submission).map {
+                "\($0.amount) \($0.instrumentId == "Amulet" ? "CC" : $0.instrumentId)"
+            }
+            return ("arrow.up.right.circle", Color.orange, "Payment request" + (amount.map { ": \($0)" } ?? ""))
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top) {
+            Image(systemName: style.icon)
+                .foregroundStyle(style.tint)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(style.title)
+                Text(approval.request.peer.name)
+                    .font(.caption.weight(.medium))
+                Text("Waiting for you · tap to review")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "hourglass")
+                    Text("Expires in")
+                    Text(approval.expiresAt, style: .timer).monospacedDigit()
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
 /// One agent-activity row: what a connected dApp did or tried, sheet or no
 /// sheet. The silent kinds carry their own tints so refusals and
 /// auto-approvals read at a glance.
@@ -149,6 +213,8 @@ struct AgentActivityRow: View {
             ("arrow.up.right.circle", Color.green, "Auto-approved" + (amount.map { ": \($0)" } ?? ""))
         case .transactionRefused: ("arrow.up.right.circle", Color.red, "Refused by your policy")
         case .transactionRateLimited: ("arrow.up.right.circle", Color.red, "Rate-limited")
+        case .transactionDeclined where activity.detail == WalletModel.expiredReason:
+            ("arrow.up.right.circle", Color.secondary, "Payment request expired")
         case .transactionDeclined: ("arrow.up.right.circle", Color.secondary, "Payment declined")
         case .transactionExecuted:
             ("arrow.up.right.circle", Color.green, "Paid" + (amount.map { " \($0)" } ?? ""))
