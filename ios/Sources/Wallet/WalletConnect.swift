@@ -112,6 +112,12 @@ final class WalletConnectController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] (topic, _) in self?.handleDelete(topic: topic) }
             .store(in: &cancellables)
+        // Relay socket transitions, for the console: a lost response or a
+        // late-delivered request almost always lines up with one of these.
+        WalletKit.instance.socketConnectionStatusPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { status in print("WALLET: WC relay socket \(status)") }
+            .store(in: &cancellables)
     }
 
     /// Registers the accounts the wallet may share and the per-peer adapter
@@ -270,7 +276,9 @@ final class WalletConnectController {
                 result = .error(JSONRPCError(code: code, message: message))
             }
             try await WalletKit.instance.respond(topic: topic, requestId: requestId, response: result)
+            print("WALLET: WC responded id=\(Self.requestId(requestId)) topic=\(topic.prefix(8))…")
         } catch {
+            print("WALLET: WC respond FAILED id=\(Self.requestId(requestId)) topic=\(topic.prefix(8))… \(error)")
             await setStatus("Respond failed: \(error.localizedDescription)")
         }
     }
