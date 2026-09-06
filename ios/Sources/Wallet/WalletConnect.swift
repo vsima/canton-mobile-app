@@ -256,7 +256,9 @@ final class WalletConnectController {
             requestId: Self.requestId(request.id),
             chainId: request.chainId.absoluteString,
             method: request.method,
-            params: try? Self.jsonValue(from: request.params)
+            params: try? Self.jsonValue(from: request.params),
+            // The dApp's own deadline; the pending queue runs on it.
+            expiresAt: request.expiryTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         )
         Task {
             let response = await adapter.handle(wc)

@@ -254,6 +254,10 @@ object WalletConnectController {
                     chainId = request.chainId ?: "",
                     method = request.request.method,
                     params = params,
+                    // Reown's WalletKit (1.7) hands a wallet no request expiry, only
+                    // sessions carry one, so the pending queue falls back to the
+                    // protocol default here; iOS gets the dApp's real deadline.
+                    expiresAt = null,
                 ),
             )
             val jsonRpc = when (response) {

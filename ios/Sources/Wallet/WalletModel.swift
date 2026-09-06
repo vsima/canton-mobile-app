@@ -66,9 +66,10 @@ final class WalletModel {
         let request: DappApprovalRequest
         /// When the request arrived.
         let receivedAt: Date
-        /// When an unanswered request is declined on the user's behalf. The
-        /// SDK's request envelope carries no dApp expiry yet, so this is
-        /// WalletConnect's default session-request TTL from receipt.
+        /// When an unanswered request is declined on the user's behalf: the
+        /// dApp's own deadline from the WalletConnect envelope, or, for a
+        /// transport that carries none, WalletConnect's default request TTL
+        /// from receipt.
         let expiresAt: Date
         let resolve: (DappApproval) -> Void
     }
@@ -79,7 +80,8 @@ final class WalletModel {
     /// The request whose sheet is up right now, if any.
     private(set) var presentedApproval: WcApproval?
     private var approvalExpiryTasks: [UUID: Task<Void, Never>] = [:]
-    /// WalletConnect's default TTL for a session request.
+    /// WalletConnect's default TTL for a session request; the fallback when
+    /// the envelope names no deadline.
     static let approvalTTL: TimeInterval = 300
     /// The decline reason recorded when a request runs out of time; the
     /// Activity feed renders it as expired rather than declined.
@@ -629,8 +631,9 @@ final class WalletModel {
 
     /// The engine's approval delegate: suspends, queueing the request in
     /// `pendingApprovals` (and presenting it if nothing else is up) until a
-    /// sheet button, or the expiry timer, answers it.
-    private func awaitApproval(_ request: DappApprovalRequest) async -> DappApproval {
+    /// sheet button, or the expiry timer, answers it. The timer runs on the
+    /// dApp's deadline when the transport carried one.
+    private func awaitApproval(_ request: DappApprovalRequest, context: DappRequestContext) async -> DappApproval {
         await withCheckedContinuation { continuation in
             // `resolve` may race between a sheet button and the expiry timer;
             // the guard keeps the continuation resumed once. Only ever touched
@@ -638,11 +641,12 @@ final class WalletModel {
             var resumed = false
             let id = UUID()
             let now = Date()
+            let expiresAt = context.expiresAt ?? now.addingTimeInterval(Self.approvalTTL)
             let approval = WcApproval(
                 id: id,
                 request: request,
                 receivedAt: now,
-                expiresAt: now.addingTimeInterval(Self.approvalTTL)
+                expiresAt: expiresAt
             ) { [weak self] answer in
                 guard !resumed else { return }
                 resumed = true
@@ -652,7 +656,8 @@ final class WalletModel {
             pendingApprovals.append(approval)
             if presentedApproval == nil { presentedApproval = approval }
             approvalExpiryTasks[id] = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(Self.approvalTTL))
+                let wait = max(0, expiresAt.timeIntervalSince(Date()))
+                try? await Task.sleep(for: .seconds(wait))
                 guard !Task.isCancelled, let self else { return }
                 self.pendingApprovals.first { $0.id == id }?.resolve(.rejected(reason: Self.expiredReason))
             }
@@ -721,8 +726,8 @@ final class WalletModel {
             let session = DappSession(
                 peer: peer,
                 accounts: ClosureAccountsSource { [weak self] in await self?.dappAccounts() ?? [] },
-                approver: ClosureApprover { [weak self] request in
-                    await self?.awaitApproval(request) ?? .rejected(reason: "wallet unavailable")
+                approver: ClosureApprover { [weak self] request, context in
+                    await self?.awaitApproval(request, context: context) ?? .rejected(reason: "wallet unavailable")
                 },
                 network: DappNetworkConfig(
                     networkId: Self.dappNetworkId,
@@ -822,8 +827,10 @@ private struct ClosureAccountsSource: DappAccountsSource {
 }
 
 private struct ClosureApprover: DappApprovalDelegate {
-    let handler: @Sendable (DappApprovalRequest) async -> DappApproval
-    func approve(_ request: DappApprovalRequest) async -> DappApproval { await handler(request) }
+    let handler: @Sendable (DappApprovalRequest, DappRequestContext) async -> DappApproval
+    func approve(_ request: DappApprovalRequest, context: DappRequestContext) async -> DappApproval {
+        await handler(request, context)
+    }
 }
 
 /// Signs a CIP-0103 message with the enclave driver over the domain-separated

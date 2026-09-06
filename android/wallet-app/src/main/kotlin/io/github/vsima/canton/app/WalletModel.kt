@@ -233,8 +233,9 @@ class WalletModel(
     /** A WalletConnect request the engine has surfaced for the user to approve —
      *  the CIP-0103 approval request plus a [resolve] to answer it. It waits in
      *  [pendingApprovals] until a sheet button, or the expiry timer, resolves it.
-     *  [expiresAt] is WalletConnect's default session-request TTL from receipt:
-     *  the SDK's request envelope carries no dApp expiry yet. */
+     *  [expiresAt] is the dApp's own deadline from the WalletConnect envelope,
+     *  or WalletConnect's default request TTL from receipt when the transport
+     *  carried none. */
     data class WcApproval(
         val id: String,
         val request: DappApprovalRequest,
@@ -843,13 +844,28 @@ class WalletModel(
 
     /** The engine's approval delegate: suspends, queueing the request in
      *  [pendingApprovals] (and presenting it if nothing else is up) until a
-     *  sheet button, or the expiry timer, answers it. */
-    private val approver = DappApprovalDelegate { request ->
+     *  sheet button, or the expiry timer, answers it. The timer runs on the
+     *  dApp's deadline when the transport carried one. */
+    private val approver = object : DappApprovalDelegate {
+        override suspend fun approve(request: DappApprovalRequest): DappApproval =
+            approve(request, io.github.vsima.canton.dapp.DappRequestContext.NONE)
+
+        override suspend fun approve(
+            request: DappApprovalRequest,
+            context: io.github.vsima.canton.dapp.DappRequestContext,
+        ): DappApproval = awaitApproval(request, context)
+    }
+
+    private suspend fun awaitApproval(
+        request: DappApprovalRequest,
+        context: io.github.vsima.canton.dapp.DappRequestContext,
+    ): DappApproval {
         val decision = CompletableDeferred<DappApproval>()
         withContext(kotlinx.coroutines.Dispatchers.Main) {
             val id = java.util.UUID.randomUUID().toString()
             val now = Instant.now()
-            val approval = WcApproval(id, request, now, now.plusSeconds(APPROVAL_TTL_SECONDS)) { answer ->
+            val expiresAt = context.expiresAt ?: now.plusSeconds(APPROVAL_TTL_SECONDS)
+            val approval = WcApproval(id, request, now, expiresAt) { answer ->
                 // A sheet button and the expiry timer may race; the deferred
                 // completes once and the queue drops the entry once.
                 if (decision.complete(answer)) settleApproval(id)
@@ -857,12 +873,12 @@ class WalletModel(
             pendingApprovals = pendingApprovals + approval
             if (presentedApproval == null) presentedApproval = approval
             approvalExpiryJobs[id] = scope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                delay(APPROVAL_TTL_SECONDS * 1000)
+                delay(java.time.Duration.between(Instant.now(), expiresAt).toMillis().coerceAtLeast(0))
                 pendingApprovals.firstOrNull { it.id == id }
                     ?.resolve(DappApproval.Rejected(EXPIRED_REASON))
             }
         }
-        decision.await()
+        return decision.await()
     }
 
     /** Drops an answered request from the queue and takes its sheet down.
@@ -1052,7 +1068,8 @@ class WalletModel(
         joinToString("") { byte -> "%02x".format(byte.toInt() and 0xFF) }
 
     companion object {
-        /** WalletConnect's default TTL for a session request. */
+        /** WalletConnect's default TTL for a session request; the fallback when
+         *  the envelope names no deadline. */
         const val APPROVAL_TTL_SECONDS: Long = 300
         /** The decline reason recorded when a request runs out of time; the
          *  Activity feed renders it as expired rather than declined. */
