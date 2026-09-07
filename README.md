@@ -17,7 +17,10 @@ through the API you'd use.
 
 **Who.** Developers evaluating or integrating the Canton mobile SDKs — the
 native [`canton-mobile-sdk`](https://github.com/vsima/canton-mobile-sdk)
-(Swift + Kotlin) and the official `@canton-network` JavaScript SDKs.
+(Swift + Kotlin) and the official `@canton-network` JavaScript SDKs — and
+product people deciding what a wallet built on them can promise their
+users. Every wallet feature below is written for both: what the user gets,
+then what a developer can read and reuse, then where it has run for real.
 
 ## The three references
 
@@ -73,67 +76,173 @@ call back to the shop until the on-ledger payment itself. A direct CIP-0103
 connection (WalletConnect one-tap) now ships alongside it, live-verified
 end-to-end on both phones; the QR flow above stays the zero-relay, offline path.
 
-## What's implemented — and what it proves for the SDK
+## What the wallet does, and what it proves
+
+Every feature is written three ways: **for users**, the outcome a product
+manager can put on a roadmap; **for developers**, what it exercises in the
+SDK and where to read the code; and **verified**, where it has run for
+real. Everything goes through the SDKs' public APIs.
+
+| Feature | What the user gets | Built on |
+|---|---|---|
+| Self-custody on device hardware | A key that cannot be exported, synced, or read, by anyone | `SigningDriver`, `ExternalPartyClient` |
+| Verify before signing | The key signs only what the phone recomputed and showed | `signAndExecute` hash verification |
+| Portfolio, inbox, transfers | Balances, offers to accept or reject, transfers with memos, history | `TokenStandardClient` |
+| Instant receiving | A switch that makes incoming transfers settle in one step | Transfer preapproval APIs |
+| Scan to pay | Point the camera at a shop's QR; the order is prefilled for review | `canton-checkout:` deep link |
+| Connect a dApp or an agent | Pair by QR; sign-ins and payments come back to the phone for approval | `DappSession`, the WalletConnect adapter |
+| Agents with limits | Per-dApp caps the wallet enforces, and an optional amount it approves alone | `DappSpendPolicy`, `SpendLedger` |
+| Activity | One feed for money movement and everything an agent did, silent outcomes included | `DappActivity` |
+| Pending requests | A request swiped away waits, with a countdown, until you decide or it expires | `DappRequestContext` |
 
 ### The wallet — native `canton-mobile-sdk`
 
-- **Self-custody on device hardware.** External-party onboarding with keys in
-  the Secure Enclave (iOS) or Android Keystore (StrongBox with TEE fallback),
-  never leaving the device. The signer sheet reports the achieved security level
-  honestly — including "software" in simulators. Verified live on StrongBox: a
-  Pixel 11 Pro Fold (Android 17) onboarded with a StrongBox-resident key and
-  ran the full agent payment flow, every signature in the secure element.
-  *Proves: `SigningDriver`, `ExternalPartyClient`.*
-- **Verify before signing.** Every externally-signed transaction goes through
-  the SDK's client-side prepared-transaction hash verification: the hardware key
-  only signs a hash the device recomputed from the transaction itself. *Proves:
-  `signAndExecute` hash verification, held to shared golden vectors.*
-- **CIP-0056 token standard.** Portfolio (holdings rolled up per instrument),
-  the propose→accept inbox with on-device signed accept/reject, transfers with
-  memos, and holdings history with transaction detail. *Proves:
-  `TokenStandardClient`, registry choice contexts.*
-- **Transfer preapprovals.** "Instant receiving" is a switch: on requests a
-  receiver-signed preapproval; off exercises `TransferPreapproval_Cancel`, also
-  signed on-device. *Proves: the preapproval request / lookup / cancel APIs.*
-- **Scan to pay.** The Send scanner — and the phone camera, via the
-  `canton-checkout:` deep link — reads a shop's checkout QR, reproduces the
-  order for review, and prefills the transfer. *Proves: the wallet as a real
-  payer against a dApp.*
-- **Agents with limits.** The dApps tab is the roster of everything paired
-  over WalletConnect, agents included, with one action: connect. Tapping a
-  dApp opens its limits: a per-payment maximum, a rolling 24-hour cap, and
-  an optional line under which payments are approved with no sheet. The
-  wallet enforces them before any sheet appears: a payment over a cap is
-  refused with a reason and the agent is told, one under the line is
-  signed silently, everything between goes to the approval sheet. Limits
-  are keyed to the dApp's identity (its URL, then its name), so they
-  survive re-pairing, and the sheet shows the Verify API's "Unverified"
-  chip when the origin is not attested. Limits, receipts, and the feed
-  live in app-private storage (`agent-policies.json`,
-  `agent-receipts.jsonl`, `agent-activity.jsonl`), the same shapes on both
-  platforms. *Proves: `DappSpendPolicy`, `SpendLedger`,
-  `DappCommandSummary`.*
-- **An activity feed for what the agent did.** Activity is one feed for
-  transfers, transfer offers, and every dApp outcome: connected, signed in,
-  requested, auto-approved, refused by policy, rate-limited, declined,
-  paid, failed. Outcomes that raised no sheet badge the tab and post a
-  local notification, so a silent approval or refusal is never invisible.
-  Filters: All, Transfers, Requests, dApps. *Proves: `DappActivity`,
-  `DappActivityObserver`.*
-- **Pending requests you can come back to.** Swiping an approval sheet away
-  answers nothing. The request waits at the top of Activity with a live
-  countdown to the dApp's own deadline (an hour for the reference agent),
-  with Decline and Approve on the row and Details to reopen the sheet;
-  the tab badge counts it. A request that arrives while another sheet is
-  up waits its turn, and a just-answered sheet is never followed by the
-  next one rising under the same finger. Unanswered past the deadline, it
-  is declined for you and the feed says so. *Proves: `DappRequestContext`
-  (on iOS; Reown's Android WalletKit exposes no request expiry, so Android
-  falls back to WalletConnect's five-minute default).*
-- **Adaptive layouts from stock components.** `NavigationSplitView` sidebar on
-  iPad; `NavigationSuiteScaffold` bar→rail on Android phones, tablets, foldables.
+#### Self-custody on device hardware
+
+**For users.** The wallet's key is created inside the phone's secure
+hardware (Secure Enclave on iOS, StrongBox or the TEE keystore on Android)
+and never leaves it: not to a backup, not to a cloud, not to this app. The
+signer screen says which tier the device achieved, including "software" in
+a simulator.
+
+**For developers.** External-party onboarding (generate, sign, allocate)
+through `ExternalPartyClient` with a hardware `SigningDriver`. Read
+`WalletModel` on either platform for onboarding and restore, and the signer
+sheet for how the achieved level is reported.
+
+**Verified.** Pixel 11 Pro Fold (Android 17) with a StrongBox-resident key
+ran the full agent payment flow, every signature in the secure element; a
+TEE-tier OnePlus before it; the iPhone simulator with a software key,
+reported as such.
+
+#### Verify before signing
+
+**For users.** Nothing is signed that the phone did not recompute itself:
+the hardware key signs a hash the device derived from the transaction it
+displayed.
+
+**For developers.** `signAndExecute` verifies the prepared-transaction hash
+by default and the app never opts out. Held to golden vectors shared by
+both SDKs.
+
+**Verified.** Every externally signed transaction in the flows below.
+
+#### Portfolio, inbox, and transfers (CIP-0056)
+
+**For users.** Balances rolled up per instrument, an inbox of transfers to
+accept or reject, transfers with a memo, and a history with detail per
+transaction.
+
+**For developers.** `TokenStandardClient` end to end: holdings, the
+propose-and-accept inbox with on-device signed accept and reject, transfers,
+and history rows with direction, counterparty, and fee-inclusive net. Read
+`WalletModel` and the Portfolio, Transfer, and Activity screens.
+
+**Verified.** LocalNet, both platforms.
+
+#### Instant receiving
+
+**For users.** A switch. On, incoming transfers settle in one step with no
+inbox. Off, they wait for acceptance again.
+
+**For developers.** Transfer preapproval request, lookup, and cancel, all
+signed on device; cancel is receiver-side and native-only.
+
+**Verified.** LocalNet, both platforms.
+
+#### Scan to pay
+
+**For users.** Point the camera at a shop's checkout QR. The wallet opens
+with the order prefilled for review; one tap pays. Nothing is fetched from
+the shop until the payment itself.
+
+**For developers.** A self-describing `canton-checkout:` deep link the
+camera and the in-app scanner both open; no relay, no callback. The dApp
+shop in `dapp-server/` produces it.
+
+**Verified.** Both phones against the shop on LocalNet.
+
+#### Connect a dApp or an agent
+
+**For users.** Scan a pairing QR from a website or an AI agent. From then on
+its sign-ins and payments arrive on the phone as typed approval screens
+(Connect, Sign in, Payment) showing the amount, recipient, memo, a
+countdown, and an "Unverified" mark when the origin is not attested.
+
+**For developers.** The wallet side of CIP-0103 over WalletConnect: a Reown
+WalletKit binding drives the SDK's adapter through two touch-points
+(`sessionNamespaces` and `handle`), one `DappSession` per peer, decisions
+through `DappApprovalDelegate`. Read `WalletConnect` (relay binding,
+per-topic adapters, stable dApp identity) and the approval sheet in
+`ConnectView` / `MainActivity`.
+
+**Verified.** Pixel 11 Pro Fold and the iOS simulator, with the reference
+agent ([canton-agent-mcp](https://github.com/vsima/canton-agent-mcp)) and
+the dApp shop.
+
+#### Agents with limits
+
+**For users.** Each connected dApp has its own limits: a per-payment
+maximum, a rolling 24-hour cap, and optionally an amount under which
+payments are approved without asking. Over a cap, the wallet refuses and
+the agent is told why. Under the line, it pays silently. In between, you
+decide. Limits stick to the dApp's identity, so re-pairing keeps them.
+
+**For developers.** `DappSpendPolicy` supplied to the session per peer and
+read on every request; receipts in a persisted `SpendLedger`; the strict
+transfer parser `DappCommandSummary` behind the sheet's summary. Read
+`AgentStore` (policies, receipts, and activity as JSON in app-private
+storage, the same shapes on both platforms), the dApp detail sheet (the
+editor), and the session factory in `WalletModel`.
+
+**Verified.** Pixel and the iOS simulator: 1 CC paid silently, 5 CC on the
+sheet, 100 CC refused with a visible row.
+
+#### Activity
+
+**For users.** One feed for money in and out, transfer offers, and
+everything a dApp did: connected, signed in, requested, approved without
+asking, refused, rate-limited, declined, paid, failed. Outcomes that never
+showed a screen badge the tab and post a notification, so nothing an agent
+did is invisible. Filters: All, Transfers, Requests, dApps.
+
+**For developers.** `DappActivityObserver` on the session, persisted as JSON
+lines and merged with `TokenStandardClient` history into one
+reverse-chronological list. Read `ActivityView` / `ActivityScreen` and
+`AgentNotifications`.
+
+**Verified.** Both platforms.
+
+#### Pending requests
+
+**For users.** Swipe an approval away and it is not declined. It waits at
+the top of Activity with a countdown to the dApp's own deadline, with
+Decline and Approve on the row and Details to bring the screen back. Left
+past the deadline, it is declined for you and the feed says so.
+
+**For developers.** A queue in the model with one presented request; the
+timer runs on `DappRequestContext.expiresAt` from the WalletConnect
+envelope on iOS, and on the protocol's five-minute default on Android,
+where Reown's WalletKit exposes no request expiry. A request that arrives
+while another is up waits its turn, and a just-answered sheet is never
+followed by the next one under the same finger. Read `pendingApprovals` in
+`WalletModel` and the pending row in the Activity screen.
+
+**Verified.** iOS simulator, live: swiped, reopened from the row, declined,
+agent told "Declined". Android builds and passes its tests; not yet run on
+a device.
+
+#### Adaptive layouts from stock components
+
+`NavigationSplitView` sidebar on iPad; `NavigationSuiteScaffold` bar to rail
+on Android phones, tablets, and foldables.
 
 ### The dApp shop — official `@canton-network` JS SDKs
+
+For a product, this is the other side of the counter: a real storefront that
+takes a Canton payment from any wallet, with no key on the server. For a
+developer, it is proof that the ecosystem's own JavaScript SDKs drive our
+wallet.
 
 - **Storefront, cart, checkout.** A browsable shop that turns a cart into one
   payable order priced in Canton Coin.
@@ -153,6 +262,10 @@ end-to-end on both phones; the QR flow above stays the zero-relay, offline path.
   an independent implementation, not our own client talking to our own engine.*
 
 ### The dApp app — `canton-dapp` only
+
+For a product, this is what a third-party app that asks a wallet for
+signatures looks like when it holds nothing sensitive. For a developer, it
+is the SDK's module split proven by a build.
 
 - **The module split, enforced by the build.** Links only `canton-dapp`; it
   *cannot* reach a signing driver or the Ledger API stubs — there is no import
@@ -237,6 +350,22 @@ endpoints.
    wallet (or use the wallet's Send scanner).
 3. The wallet shows the order for **review**, prefilled; tap **Send**.
 4. Watch the shop flip to **Paid** as the payment settles on-ledger.
+
+## Try it: pay with an agent
+
+1. Install the reference agent in Claude Code (other harnesses in
+   [its README](https://github.com/vsima/canton-agent-mcp#install)):
+   `claude mcp add canton-agent --env WC_PROJECT_ID=<your-project-id> -- npx -y canton-agent-mcp`.
+2. Ask the agent to connect. It prints a QR; scan it from the wallet's
+   **dApps** tab and tap **Connect**.
+3. In **dApps**, tap the agent and set its limits: for example 10 per
+   payment, 25 per day, approve alone under 2.
+4. Ask the agent to pay **1 CC** to a party you know (the shop's merchant
+   party works): it settles with no screen. Ask for **5 CC**: the approval
+   screen appears. Ask for **100 CC**: the wallet refuses and the agent
+   explains why.
+5. Open **Activity**: every one of those is a row, including the two that
+   showed nothing.
 
 ## Layout
 
