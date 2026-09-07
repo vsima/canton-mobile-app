@@ -99,6 +99,37 @@ end-to-end on both phones; the QR flow above stays the zero-relay, offline path.
   `canton-checkout:` deep link — reads a shop's checkout QR, reproduces the
   order for review, and prefills the transfer. *Proves: the wallet as a real
   payer against a dApp.*
+- **Agents with limits.** The dApps tab is the roster of everything paired
+  over WalletConnect, agents included, with one action: connect. Tapping a
+  dApp opens its limits: a per-payment maximum, a rolling 24-hour cap, and
+  an optional line under which payments are approved with no sheet. The
+  wallet enforces them before any sheet appears: a payment over a cap is
+  refused with a reason and the agent is told, one under the line is
+  signed silently, everything between goes to the approval sheet. Limits
+  are keyed to the dApp's identity (its URL, then its name), so they
+  survive re-pairing, and the sheet shows the Verify API's "Unverified"
+  chip when the origin is not attested. Limits, receipts, and the feed
+  live in app-private storage (`agent-policies.json`,
+  `agent-receipts.jsonl`, `agent-activity.jsonl`), the same shapes on both
+  platforms. *Proves: `DappSpendPolicy`, `SpendLedger`,
+  `DappCommandSummary`.*
+- **An activity feed for what the agent did.** Activity is one feed for
+  transfers, transfer offers, and every dApp outcome: connected, signed in,
+  requested, auto-approved, refused by policy, rate-limited, declined,
+  paid, failed. Outcomes that raised no sheet badge the tab and post a
+  local notification, so a silent approval or refusal is never invisible.
+  Filters: All, Transfers, Requests, dApps. *Proves: `DappActivity`,
+  `DappActivityObserver`.*
+- **Pending requests you can come back to.** Swiping an approval sheet away
+  answers nothing. The request waits at the top of Activity with a live
+  countdown to the dApp's own deadline (an hour for the reference agent),
+  with Decline and Approve on the row and Details to reopen the sheet;
+  the tab badge counts it. A request that arrives while another sheet is
+  up waits its turn, and a just-answered sheet is never followed by the
+  next one rising under the same finger. Unanswered past the deadline, it
+  is declined for you and the feed says so. *Proves: `DappRequestContext`
+  (on iOS; Reown's Android WalletKit exposes no request expiry, so Android
+  falls back to WalletConnect's five-minute default).*
 - **Adaptive layouts from stock components.** `NavigationSplitView` sidebar on
   iPad; `NavigationSuiteScaffold` bar→rail on Android phones, tablets, foldables.
 
