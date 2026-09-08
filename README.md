@@ -110,7 +110,7 @@ through `ExternalPartyClient` with a hardware `SigningDriver`. Read
 `WalletModel` on either platform for onboarding and restore, and the signer
 sheet for how the achieved level is reported.
 
-**Verified.** Pixel 11 Pro Fold (Android 17) with a StrongBox-resident key
+**Verified.** Pixel 11 Pro (Android 17) with a StrongBox-resident key
 ran the full agent payment flow, every signature in the secure element; a
 TEE-tier OnePlus before it; the iPhone simulator with a software key,
 reported as such.
@@ -176,7 +176,7 @@ through `DappApprovalDelegate`. Read `WalletConnect` (relay binding,
 per-topic adapters, stable dApp identity) and the approval sheet in
 `ConnectView` / `MainActivity`.
 
-**Verified.** Pixel 11 Pro Fold and the iOS simulator, with the reference
+**Verified.** Pixel 11 Pro and the iOS simulator, with the reference
 agent ([canton-agent-mcp](https://github.com/vsima/canton-agent-mcp)) and
 the dApp shop.
 
